@@ -95,6 +95,18 @@ RUN Rscript -e "BiocManager::install(c('GenomicRanges', 'Seqinfo', 'limma', 'DES
 
 RUN /rocker_scripts/install_rstudio.sh
 
+## System libraries for common R/Bioconductor source builds
+##   libcurl/bz2: curl, Rhtslib; magick++: magick; udunits/gdal/geos/proj/sqlite: units, sf, terra;
+##   fftw3: fftwtools/EBImage. Plus vim and xz-utils for convenience.
+## NVIDIA user-space driver (libcuda.so.1 + nvidia-smi): Terra did not provide these in this
+## RStudio container. The 580 series must match the host's kernel driver.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      xz-utils vim libcurl4-openssl-dev libbz2-dev libmagick++-dev \
+      libudunits2-dev libgdal-dev libgeos-dev libproj-dev libsqlite3-dev libfftw3-dev \
+      libnvidia-compute-580 nvidia-utils-580 \
+ && rm -rf /var/lib/apt/lists/*
+
 ## Local agentic coding: prebuilt llama.cpp, Node 22, Pi/OpenCode, hf CLI, t4-coder
 COPY --from=llama-build /opt/llama /opt/llama
 COPY scripts/t4-coder.sh /usr/local/bin/t4-coder
