@@ -1,4 +1,44 @@
 # check=skip=SecretsUsedInArgOrEnv
+
+#######################################################################
+# Stage 1: build llama.cpp for t4-coder (local agentic coding)
+#   CUDA 12.8 to match Terra's T4 driver; Ubuntu 22.04 to match terra-base.
+#   Only the binaries plus three CUDA runtime libs are carried into the
+#   final image, not the multi-GB CUDA toolkit.
+#######################################################################
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS llama-build
+
+# Pin a llama.cpp release tag for reproducible images
+ARG LLAMA_CPP_REF=b11435
+# 75-real = native T4 kernels; 80-virtual = PTX fallback for newer GPUs
+ARG CUDA_ARCHS="75-real;80-virtual"
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git cmake build-essential libssl-dev ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/llama.cpp /src
+
+# Same recipe as llama.cpp's own Linux CUDA release: CPU backend variants are
+# selected at runtime (the build machine's CPU flags don't leak in), and
+# libraries are found next to the binary via an $ORIGIN rpath.
+RUN cmake -S /src -B /src/build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+      -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+      -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}" \
+      -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+ && cmake --build /src/build --config Release -j"$(nproc)"
+
+RUN mkdir -p /opt/llama/bin \
+ && cp -a /src/build/bin/. /opt/llama/bin/ \
+ && cp -L /usr/local/cuda/lib64/libcudart.so.12 \
+          /usr/local/cuda/lib64/libcublas.so.12 \
+          /usr/local/cuda/lib64/libcublasLt.so.12 /opt/llama/bin/
+
+#######################################################################
+# Stage 2: RStudio + Bioconductor on terra-base
+#######################################################################
 FROM us.gcr.io/broad-dsp-gcr-public/terra-base:1.0.1
 
 USER root
@@ -54,6 +94,12 @@ RUN Rscript -e "BiocManager::install(c('GenomicRanges', 'Seqinfo', 'limma', 'DES
      'SpatialExperiment', 'SpatialFeatureExperiment'))"
 
 RUN /rocker_scripts/install_rstudio.sh
+
+## Local agentic coding: prebuilt llama.cpp, Node 22, Pi/OpenCode, hf CLI, t4-coder
+COPY --from=llama-build /opt/llama /opt/llama
+COPY scripts/t4-coder.sh /usr/local/bin/t4-coder
+COPY scripts/install_llm_tools.sh /rocker_scripts/install_llm_tools.sh
+RUN /rocker_scripts/install_llm_tools.sh
 
 ENV PASSWORD="bioc"
 
