@@ -158,7 +158,7 @@ download_model() {
     log "Setting up huggingface_hub in $VENV…"
     [[ -x "$VENV/bin/hf" ]] || {
       python3 -m venv "$VENV"
-      "$VENV/bin/pip" install -q -U "huggingface_hub[hf_xet]"
+      PIP_USER=0 "$VENV/bin/pip" install -q -U "huggingface_hub[hf_xet]"   # Terra sets PIP_USER=true
     }
     hf="$VENV/bin/hf"
   fi
@@ -250,6 +250,7 @@ PY
 }
 
 cmd_install() {
+  require_tools curl python3
   mkdir -p "$LOG_DIR"
   preflight
   if [[ "$BIN" == "$PREBUILT_DIR" ]]; then
@@ -301,13 +302,35 @@ wait_healthy() {  # $1 = port, $2 = pid, $3 = timeout seconds
   done
 }
 
-is_running() { [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+# The pidfile lives on the persistent disk and can outlive the container, so check
+# that the PID is really our llama-server, not an unrelated process that reused it.
+require_tools() {
+  local missing=()
+  for t in "$@"; do command -v "$t" >/dev/null || missing+=("$t"); done
+  (( ${#missing[@]} == 0 )) || die "Missing required tools: ${missing[*]}. Install with: sudo apt-get install -y ${missing[*]}"
+}
+
+is_running() {
+  [[ -f "$PIDFILE" ]] || return 1
+  local pid; pid=$(cat "$PIDFILE")
+  if kill -0 "$pid" 2>/dev/null && [[ "$(cat "/proc/$pid/comm" 2>/dev/null)" == llama-server* ]]; then
+    return 0
+  fi
+  rm -f "$PIDFILE"   # stale
+  return 1
+}
 
 cmd_start() {
+  require_tools curl
   is_running && { log "Already running (pid $(cat "$PIDFILE"))."; return; }
   mkdir -p "$LOG_DIR"
   "$BIN/llama-server" --version >/dev/null 2>&1 \
     || die "llama-server won't run (missing CUDA libs after an environment rebuild?). Re-run: ./t4-coder.sh install"
+  if ! command -v nvidia-smi >/dev/null || ! nvidia-smi -L >/dev/null 2>&1; then
+    warn "No working nvidia-smi: the NVIDIA driver libraries are missing or mismatched, so llama.cpp"
+    warn "would run on CPU only. Install libnvidia-compute-580 + nvidia-utils-580 (matching the host driver)."
+    [[ "${ALLOW_CPU:-0}" == 1 ]] || die "Refusing to start without a GPU (ALLOW_CPU=1 to override)."
+  fi
   server_cmd "$PORT" "$N_CPU_MOE"
   log "Starting llama-server on :$PORT (n-cpu-moe=$N_CPU_MOE, ctx=$CTX, think=$THINK)…"
   setsid nohup "${SERVER_CMD[@]}" > "$LOG_DIR/llama-server.log" 2>&1 < /dev/null &
@@ -336,6 +359,7 @@ cmd_status() {
 
 # ---------------------------------------------------------------- tuning
 cmd_tune() {
+  require_tools curl jq python3
   is_running && die "Stop the main server first (./t4-coder.sh stop); tuning needs the whole GPU."
   local candidates tport=8191 best="" best_tg=0
   read -r -a candidates <<<"${TUNE_VALUES:-16 20 24 28 32}"
