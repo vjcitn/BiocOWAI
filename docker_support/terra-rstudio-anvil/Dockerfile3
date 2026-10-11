@@ -21,8 +21,8 @@ RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" https://github.com/ggml-org/
 
 # Same recipe as llama.cpp's own Linux CUDA release: CPU backend variants are
 # selected at runtime (the build machine's CPU flags don't leak in), and
-#       -DGGML_CUDA=ON -DGGML_CUDA_NCCL=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHS}"
 # libraries are found next to the binary via an $ORIGIN rpath.
+# NCCL is off: it's only for multi-GPU, and the final image doesn't ship it.
 RUN cmake -S /src -B /src/build \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
@@ -96,6 +96,20 @@ RUN Rscript -e "BiocManager::install(c('GenomicRanges', 'Seqinfo', 'limma', 'DES
 
 RUN /rocker_scripts/install_rstudio.sh
 
+## NVIDIA user-space driver: libcuda.so.1 (libnvidia-compute) and nvidia-smi (nvidia-utils).
+## Terra does not inject these into this RStudio container, so without them the GPU is
+## unusable. The 580 series must match the driver on Terra's GPU hosts; if nvidia-smi ever
+## reports "Driver/library version mismatch", rebuild to pick up the matching 580.x.
+## Also: system libraries for common R/Bioconductor source builds
+##   libcurl/bz2: curl, Rhtslib; magick++: magick; udunits/gdal/geos/proj/sqlite: units, sf, terra;
+##   fftw3: fftwtools/EBImage. Plus vim and xz-utils.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libnvidia-compute-580 nvidia-utils-580 \
+      xz-utils vim libcurl4-openssl-dev libbz2-dev libmagick++-dev \
+      libudunits2-dev libgdal-dev libgeos-dev libproj-dev libsqlite3-dev libfftw3-dev \
+ && rm -rf /var/lib/apt/lists/*
+
 ## Local agentic coding: prebuilt llama.cpp, Node 22, Pi/OpenCode, hf CLI, t4-coder
 COPY --from=llama-build /opt/llama /opt/llama
 COPY scripts/t4-coder.sh /usr/local/bin/t4-coder
@@ -107,4 +121,3 @@ ENV PASSWORD="bioc"
 ENV RSTUDIO_HOME=/home/rstudio
 EXPOSE 8001
 ENTRYPOINT ["/init"]
-
