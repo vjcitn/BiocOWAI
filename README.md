@@ -7,6 +7,13 @@ The main resources in this repo are
 - Dockerfiles that defines a preconfigured environment with llama.cpp to serve LLMs and pi (or OpenCode) as a coding harness
 - a script, t4-coder.sh, authored Claude Opus 5.5, that sets up and tunes the server to the available GPU/CPU resources
 
+Specifically, `docker_support/terra-rstudio-anvil/Dockerfile_rstu_btw` produces a 15GB image that has been tested on terra.  It includes
+
+- support for t4-coder (llama.cpp, can install Qwen3.6-35B-A3B)
+- the [pi](https://pi.dev) agentic coding harness
+- RStudio, R 4.6.1, BiocManager and sufficient system library support for ellmer and btw
+- A number of basic Bioconductor packages sufficient for basic work in single-cell and spatial transcriptomics
+
 
 t4-coder runs an open-weight coding model entirely inside a Terra environment: 
 
