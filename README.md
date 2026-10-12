@@ -1,5 +1,7 @@
 # BiocOWAI - open weight open harness AI with rstudio targeting AnVIL T4 GPU
 
+## Overview
+
 The main resources in this repo are 
 
 - a Dockerfile that defines a preconfigured environment with llama.cpp to serve LLMs and pi (or OpenCode) as a coding harness
@@ -32,4 +34,37 @@ t4-coder runs an open-weight coding model entirely inside a Terra environment:
 #
 # Everything lives under $LLM_HOME (default ~/llm) so it sits on the Terra persistent
 # disk. apt packages may need reinstalling if the cloud environment is recreated;
+```
+
+## Note on tuning and configuration
+
+On the 8 CPU, 52 GB RAM terra cloud env, we have
+```
+rstudio@6adc68012135:~$ time t4-coder tune
+n-cpu-moe  prefill t/s  decode t/s   VRAM used     
+16         failed to load (likely OOM; see /home/rstudio/llm/logs/tune-16.log)
+20         289          31.1         13337 MiB     
+24         250          28.7         11483 MiB     
+28         214          26.9         9625 MiB      
+32         189          24           7771 MiB      
+[t4-coder] Fastest was n-cpu-moe=20 (31.1 t/s). Saved N_CPU_MOE=22 (+2 for context headroom).
+[t4-coder] Next: ./t4-coder.sh start
+
+real    2m0.712s
+user    2m39.004s
+sys     0m15.214s
+```
+Note the location of the configuration file:
+```
+rstudio@6adc68012135:~$ ls ~/llm
+config.env  logs  models
+rstudio@6adc68012135:~$ cat ~/llm/config.env
+: "${HF_REPO:=unsloth/Qwen3.6-35B-A3B-GGUF}"
+: "${QUANT:=UD-Q4_K_XL}"
+: "${ALIAS:=qwen3.6-35b-a3b}"
+: "${PORT:=8181}"
+: "${CTX:=65536}"
+: "${N_CPU_MOE:=22}"
+: "${HARNESS:=pi}"
+: "${THINK:=1}"
 ```
