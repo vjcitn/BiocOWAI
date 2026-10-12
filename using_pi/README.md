@@ -54,3 +54,14 @@ pi_run("Summarize what R/robust_scale.R does and list any edge cases it misses",
  
  The most practically important missing case is **MAD = 0** (constant data), which would be best handled with a guard that returns `0` (or `NA`) with a warning instead of silently producing `NaN`.
 
+Approximate resource usage for the work noted here:
+```
+rstudio@6adc68012135:~$ t4-coder status
+[t4-coder] Running, pid 8026; health: {"status":"ok"}
+12435 MiB, 15360 MiB, 0 %
+10.23.781.802 I slot print_timing: id  0 | task 3696 | prompt eval time =    3795.16 ms /   572 tokens (    6.63 ms per token,   150.72 tokens per second)
+10.23.781.816 I slot print_timing: id  0 | task 3696 |        eval time =   19787.96 ms /   566 tokens (   35.02 ms per token,    28.55 tokens per second)
+10.23.781.818 I slot print_timing: id  0 | task 3696 |       total time =   23583.12 ms /  1138 tokens
+10.23.781.820 I slot print_timing: id  0 | task 3696 |    graphs reused =       4202
+10.23.782.176 I slot      release: id  0 | task 3696 | stop processing: n_tokens = 2823, truncated = 0
+```
