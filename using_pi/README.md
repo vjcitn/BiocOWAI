@@ -65,3 +65,4 @@ rstudio@6adc68012135:~$ t4-coder status
 10.23.781.820 I slot print_timing: id  0 | task 3696 |    graphs reused =       4202
 10.23.782.176 I slot      release: id  0 | task 3696 | stop processing: n_tokens = 2823, truncated = 0
 ```
+Comment from Claude:  One optional tweak: with about 3 GB of GPU memory to spare at this context size, you could try N_CPU_MOE=20, the fastest setting from tuning. Each layer moved back onto the GPU costs roughly half a GB. The +2 margin was there to protect long sessions, and this model’s per-token context memory is small, so 20 may well hold. Try it for a session with N_CPU_MOE=20 t4-coder start. If it never runs out of memory, edit ~/llm/config.env to keep it.
