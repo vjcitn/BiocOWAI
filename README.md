@@ -2,7 +2,7 @@
 
 The main resources in this repo are 
 
-- a Dockerfile that defines a preconfigured environment with llama.cpp to serve LLMs and pi (or OpenCode) as a coding harness
+- Dockerfiles that defines a preconfigured environment with llama.cpp to serve LLMs and pi (or OpenCode) as a coding harness
 - a script, t4-coder.sh, authored Claude Opus 5.5, that sets up and tunes the server to the available GPU/CPU resources
 
 
