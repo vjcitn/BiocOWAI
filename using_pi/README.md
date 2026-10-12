@@ -32,3 +32,25 @@ Continue:
 pi_run("Summarize what R/robust_scale.R does and list any edge cases it misses",
        dir = "~/agent-test/madr", tools = c("read", "grep", "find", "ls"))
 ```
+## Summary
+
+  This file defines two functions for robust statistical scaling:
+
+  1. **`mad_na_robust(x, na.rm = TRUE, constant = 1.4826)`** — Computes the Median Absolute Deviation (MAD). It calculates `median(|X_i - median(X)|)` and optionally multiplies by a consistency constant (default `1.4826`, which makes MAD consistent with σ under normality).
+
+  2. **`robust_scale(x, na.rm = TRUE)`** — Centers a vector by its median and scales by the MAD (with `constant = 1`), producing a vector with median 0 and MAD 1. Missing values are preserved as `NA`.
+  ---
+ ## Edge Cases It Misses                                                                                                                      
+ | Edge Case | Problem |
+ |---|---|
+ | **MAD = 0** (all values identical, or exactly half are identical around the median) | Division by zero in `robust_scale`, returning `Inf`/`NaN` with no warning. |
+ | **`length(x) == 1`** | `mad_na_robust` returns `0` (MAD of a single value is 0), so `robust_scale` divides by zero. |
+ | **Non-numeric input** (character, logical, factor) | No type checking; `median()` and arithmetic will produce errors or silent coercion. |
+ | **`NaN` values** | `is.na(NaN)` is `TRUE`, so `NaN` is stripped when `na.rm = TRUE`, but `NaN` propagates through arithmetic in the `na.rm = FALSE` path, producing `NaN` results silently. |
+ | **`Inf` / `-Inf` values** | `median()` handles them, but MAD can become `Inf`, again causing division-by-`Inf` (→ 0) or `NaN` silently. |
+ | **Empty string / zero-length input** | Returns `NA_real_` from `mad_na_robust`, and `NaN` from `robust_scale` (0/0), with no explicit handling. |
+ | **Multi-dimensional input** (matrix/array) | No check — `median()` and arithmetic will behave unexpectedly (e.g., operating on the flattened vector). |
+ | **Very large vectors** | No memory or performance guardrails, though this is minor. |
+ 
+ The most practically important missing case is **MAD = 0** (constant data), which would be best handled with a guard that returns `0` (or `NA`) with a warning instead of silently producing `NaN`.
+
