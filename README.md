@@ -4,7 +4,7 @@
 
 The main resources in this repo are 
 
-- Dockerfiles that defines a preconfigured environment with llama.cpp to serve LLMs and pi (or OpenCode) as a coding harness
+- Dockerfiles that define a preconfigured environment with llama.cpp to serve LLMs and pi (or OpenCode) as a coding harness
 - a script, t4-coder.sh, authored Claude Opus 5.5, that sets up and tunes the server to the available GPU/CPU resources
 
 Specifically, `docker_support/terra-rstudio-anvil/Dockerfile_rstu_btw` produces a 16.3 GB image that has been tested on terra.  It includes
