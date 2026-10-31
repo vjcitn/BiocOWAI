@@ -94,37 +94,57 @@ Concretely:
   steps, background server + `status`/`stop`) as the pattern the
   generalized tool follows, rather than inventing a new CLI convention.
 
-### Phase 2 finding (resolved 2026-10-31)
+### Phase 2 finding (resolved 2026-10-31, corrected same day)
 
-Phase 2 was scoped from the real `Genentech/compbiobench-runner` source
-(`environment.yml` + `run_benchmark.py`), not inferred from `t4-coder.sh`.
-The finding reframes the phase: **`compbiobench-runner` has no GPU/CUDA
-dependency at all.** It is a conda-based orchestrator — one fresh, isolated
-conda environment per question (CPU bioinformatics tools: samtools, bwa,
-blast, minimap2, etc., `python=3.11`) driving a system-installed,
-authenticated LLM CLI. Its real prerequisites are conda availability and
-disk headroom for `N` concurrent per-question envs (`-n/--parallel`,
-default 5).
+Phase 2 was scoped from real source, not inferred from `t4-coder.sh` — but
+the first pass only checked upstream `Genentech/compbiobench-runner`
+(`environment.yml` + `run_benchmark.py`) and missed that this project
+actually has its own fork with further commits and a merged PR. Checking
+both gives the accurate picture:
 
-The compatibility question that actually matters is **harness-provider
-support, not GPU configuration**: `run_benchmark.py` ships exactly three
-built-in `LLMProvider` subclasses — `claude`, `codex`, `gemini` (registered
-in `LLM_PROVIDERS`, extensible via an ABC with
-`build_command`/`parse_output`/`extract_answer`/`build_test_command`).
-There is no `pi` or `opencode` provider upstream, so BiocOWAI's
-Pi-pointed-at-a-local-model harness is **not natively drivable through
-`compbiobench-runner`'s own runner** without writing and registering a
-custom `LLMProvider` subclass. This is exactly why `CBBBioc`'s
-`cbb_run_question()` bypasses `compbiobench-runner`'s runner and drives Pi
-directly in R instead — that gap, not a GPU constraint, is what phase 2
-needed to surface.
+- **`compbiobench-runner` has no GPU/CUDA dependency at all**, in either
+  repo. It is a conda-based orchestrator — one fresh, isolated conda
+  environment per question (CPU bioinformatics tools: samtools, bwa, blast,
+  minimap2, etc., `python=3.11`) driving a system-installed, authenticated
+  LLM CLI, via an extensible `LLMProvider` ABC
+  (`build_command`/`parse_output`/`extract_answer`/`build_test_command`,
+  registered in `LLM_PROVIDERS`).
+- **Upstream `Genentech/compbiobench-runner`** ships only three providers:
+  `claude`, `codex`, `gemini`. No `pi` or `opencode` provider exists there.
+- **`vjcitn/compbiobench-runner` (the fork this project actually
+  targets)** already has a `PiProvider`, merged to `main` via PR #1 ("Add
+  PiProvider: Pi coding agent CLI support for locally-served models").
+  It wires Pi (`@earendil-works/pi-coding-agent`) to a locally-served model
+  selected purely by the model string + Pi's own `~/.pi/agent/models.json`
+  — `ollama/gpt-oss:20b` initially, then `llama-cpp/qwen3.6-35b-a3b`
+  matching `t4-coder.sh`'s llama-server + `ALIAS` convention. Crucially,
+  `PiProvider` sets `uses_conda_env = False`: Pi is a per-user Node.js CLI
+  install, not cloned into a conda env per question, so the conda/disk
+  sizing that applies to `claude`/`codex`/`gemini` simply doesn't apply to
+  Pi-backed runs.
+- So the harness-provider gap identified in the first pass — "Pi isn't
+  natively drivable through `compbiobench-runner`'s own runner" — is true
+  of upstream but **already solved in the fork**. `CBBBioc`'s
+  `cbb_run_question()` driving Pi directly in R remains a separate, valid
+  path (useful when you don't want `compbiobench-runner`'s runner at all),
+  but it is not the only option, and BiocOWAI's actual target is the fork's
+  `PiProvider`, not a provider that still needs to be written.
 
-GPU still enters, but only indirectly: whatever model backs the harness has
-to answer within the runner's per-question timeout (`-t/--timeout`, default
+GPU still enters only indirectly: whatever model backs the harness has to
+answer within the runner's per-question timeout (`-t/--timeout`, default
 120 minutes). `inst/scripts/compbiobench-check.sh` checks conda, disk
-headroom, and harness-provider support, and reports the phase-1 GPU profile
-as informational context for that timeout question rather than as a
-pass/fail input.
+headroom (skipped for providers with `uses_conda_env = False`, such as
+`pi` in the fork), and harness-provider support — introspecting a real
+`COMPBIOBENCH_HOME` checkout when available (both which providers exist
+*and* each one's `uses_conda_env` flag), falling back to a
+`COMPBIOBENCH_REMOTE=fork`-vs-`upstream` distinction otherwise — and
+reports the phase-1 GPU profile as informational context for the timeout
+question rather than as a pass/fail input.
+
+**Lesson applied going forward:** when checking compatibility against an
+external dependency this project has forked, check the fork and its
+branches first, not just upstream — upstream's limitations don't
+necessarily apply once local changes are in play.
 
 ## Consequences
 
@@ -139,10 +159,11 @@ pass/fail input.
   in exchange for not forcing three hardware families through one code path.
 - Phase 2 (compbiobench-runner compatibility) turned out to be a
   harness-provider-support problem, not a GPU-compatibility problem — see
-  "Phase 2 finding" above. Any plan to run Pi/OpenCode-backed questions
-  through `compbiobench-runner`'s own `run_benchmark.py` (rather than
-  CBBBioc's direct-driving workaround) needs a custom `LLMProvider`
-  subclass as prerequisite work, not a GPU-sizing decision.
+  "Phase 2 finding" above. That problem is already solved for Pi in the
+  fork (`vjcitn/compbiobench-runner`'s `PiProvider`, `uses_conda_env =
+  False`); it is only unsolved for OpenCode, and only if running through
+  `compbiobench-runner`'s own runner rather than CBBBioc's direct-driving
+  path.
 - Containerization is partial by design: useful for the CUDA backends,
   not applicable to Metal, and never covering phase 1. Anyone expecting a
   single image to cover all three targets will be disappointed; that is a
@@ -153,7 +174,8 @@ pass/fail input.
 - Exact schema for the GPU profile (what fields phase 1 emits).
 - Where model-selection guidance (phase 4) draws its catalog from — static
   table vs. a live lookup.
-- Whether to write the custom `LLMProvider` subclass that phase 2's finding
-  shows is needed for Pi/OpenCode support in `compbiobench-runner`'s own
-  runner, or to keep relying on CBBBioc's direct-driving workaround
-  indefinitely.
+- Whether an OpenCode `LLMProvider` is worth writing for the fork (Pi's is
+  already done), or whether OpenCode-backed questions should just go
+  through CBBBioc's direct-driving path indefinitely.
+- Whether `vjcitn/compbiobench-runner` stays a long-lived fork or its
+  `PiProvider` work gets proposed upstream to Genentech at some point.
