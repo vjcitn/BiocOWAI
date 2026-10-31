@@ -146,6 +146,36 @@ external dependency this project has forked, check the fork and its
 branches first, not just upstream — upstream's limitations don't
 necessarily apply once local changes are in play.
 
+### Phase 3: harness install/config (resolved 2026-10-31)
+
+`inst/scripts/harness-install.sh` lifts `t4-coder.sh`'s
+`ensure_node()`/`install_pi()`/`install_opencode()` out into a standalone
+script and generalizes them. The key realization driving the design: Pi
+and OpenCode don't need to know anything about GPU backend at all — they
+only need a base URL, a provider key, and a model alias, which is the same
+shape whether the server behind that URL is llama.cpp CUDA on a T4/A100/MIG
+slice, llama.cpp Metal on an M4, or Ollama. So phase 3 takes no dependency
+on phase 1's GPU profile; it is backend-agnostic by construction, not by
+branching on the profile. `BASE_URL`/`PROVIDER_KEY`/`ALIAS` are the only
+inputs, and phases 4/5 (model selection, tuning) are what will eventually
+supply them per backend.
+
+Preserves exact compatibility with the compbiobench-runner fork's
+`PiProvider`: the default `PROVIDER_KEY=llama-cpp` and `ALIAS=qwen3.6-35b-a3b`
+reproduce `t4-coder.sh`'s existing `~/.pi/agent/models.json` entry, so
+`llama-cpp/qwen3.6-35b-a3b` keeps working as a `PiProvider` model string
+unchanged.
+
+One portability bug found and fixed during testing: Node.js's release
+feed names Darwin and Linux assets differently per-architecture but both
+publish a `.tar.gz`; the script matches on that instead of mixing `-xJ`
+(tar.xz) and `-xz` (tar.gz) by platform. Verified locally end-to-end
+(Node download/extraction + `~/.pi/agent/models.json` write + existing-Pi-
+binary detection) on this machine's Apple M4; the OpenCode branch's
+`curl | bash` install step is unexercised live (sandbox correctly declines
+to run arbitrary third-party install scripts) but its config-writing logic
+is the same proven pattern as Pi's.
+
 ## Consequences
 
 - `t4-coder.sh` becomes the T4 profile implementation under the new
