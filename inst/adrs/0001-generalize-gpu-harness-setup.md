@@ -41,8 +41,9 @@ model alias, never to GPU detection or tuning logic directly.
 The work splits into six phases, in order of dependency:
 
 1. Identify GPU and driver requirements on the host system.
-2. Check compatibility between `compbiobench-runner`'s requirements and the
-   detected GPU configuration.
+2. Check compatibility between `compbiobench-runner`'s requirements and this
+   host's configuration (see "Phase 2 finding" below — this turned out not
+   to be primarily a GPU question).
 3. Install and configure the harness (currently Pi; OpenCode is a secondary
    target `t4-coder.sh` already supports).
 4. Help select an appropriate open-weight model for the detected hardware.
@@ -93,6 +94,38 @@ Concretely:
   steps, background server + `status`/`stop`) as the pattern the
   generalized tool follows, rather than inventing a new CLI convention.
 
+### Phase 2 finding (resolved 2026-10-31)
+
+Phase 2 was scoped from the real `Genentech/compbiobench-runner` source
+(`environment.yml` + `run_benchmark.py`), not inferred from `t4-coder.sh`.
+The finding reframes the phase: **`compbiobench-runner` has no GPU/CUDA
+dependency at all.** It is a conda-based orchestrator — one fresh, isolated
+conda environment per question (CPU bioinformatics tools: samtools, bwa,
+blast, minimap2, etc., `python=3.11`) driving a system-installed,
+authenticated LLM CLI. Its real prerequisites are conda availability and
+disk headroom for `N` concurrent per-question envs (`-n/--parallel`,
+default 5).
+
+The compatibility question that actually matters is **harness-provider
+support, not GPU configuration**: `run_benchmark.py` ships exactly three
+built-in `LLMProvider` subclasses — `claude`, `codex`, `gemini` (registered
+in `LLM_PROVIDERS`, extensible via an ABC with
+`build_command`/`parse_output`/`extract_answer`/`build_test_command`).
+There is no `pi` or `opencode` provider upstream, so BiocOWAI's
+Pi-pointed-at-a-local-model harness is **not natively drivable through
+`compbiobench-runner`'s own runner** without writing and registering a
+custom `LLMProvider` subclass. This is exactly why `CBBBioc`'s
+`cbb_run_question()` bypasses `compbiobench-runner`'s runner and drives Pi
+directly in R instead — that gap, not a GPU constraint, is what phase 2
+needed to surface.
+
+GPU still enters, but only indirectly: whatever model backs the harness has
+to answer within the runner's per-question timeout (`-t/--timeout`, default
+120 minutes). `inst/scripts/compbiobench-check.sh` checks conda, disk
+headroom, and harness-provider support, and reports the phase-1 GPU profile
+as informational context for that timeout question rather than as a
+pass/fail input.
+
 ## Consequences
 
 - `t4-coder.sh` becomes the T4 profile implementation under the new
@@ -104,9 +137,12 @@ Concretely:
 - MIG-specific handling and Metal-specific handling are both net-new work,
   not reuse of the CUDA/T4 offload-tuning code — this ADR accepts that cost
   in exchange for not forcing three hardware families through one code path.
-- Phase 2 (compbiobench-runner compatibility) has no prior art in this repo
-  to generalize from; it will need to be scoped from
-  `compbiobench-runner`'s actual requirements, not inferred from `t4-coder.sh`.
+- Phase 2 (compbiobench-runner compatibility) turned out to be a
+  harness-provider-support problem, not a GPU-compatibility problem — see
+  "Phase 2 finding" above. Any plan to run Pi/OpenCode-backed questions
+  through `compbiobench-runner`'s own `run_benchmark.py` (rather than
+  CBBBioc's direct-driving workaround) needs a custom `LLMProvider`
+  subclass as prerequisite work, not a GPU-sizing decision.
 - Containerization is partial by design: useful for the CUDA backends,
   not applicable to Metal, and never covering phase 1. Anyone expecting a
   single image to cover all three targets will be disappointed; that is a
@@ -117,5 +153,7 @@ Concretely:
 - Exact schema for the GPU profile (what fields phase 1 emits).
 - Where model-selection guidance (phase 4) draws its catalog from — static
   table vs. a live lookup.
-- Whether `compbiobench-runner`'s GPU requirements (phase 2) are documented
-  anywhere authoritative yet, or need to be reverse-engineered from its code.
+- Whether to write the custom `LLMProvider` subclass that phase 2's finding
+  shows is needed for Pi/OpenCode support in `compbiobench-runner`'s own
+  runner, or to keep relying on CBBBioc's direct-driving workaround
+  indefinitely.
