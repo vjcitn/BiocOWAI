@@ -728,10 +728,15 @@ load.
   the fail-fast and pass-through paths in isolation (extracted function
   bodies run standalone, since this machine has no CUDA/apt to test
   against directly). Not yet exercised on an actual no-sudo T4 host.
-- Whether a Metal-side `--n-gpu-layers` sweep on M4 beats the naive
-  "offload everything" (999) setting used in the gpt-oss-20b run above --
-  the T4 analog of this question (`--n-cpu-moe`) is now closed, see the
-  `tune` sweep result just above.
+- ~~Whether a Metal-side `--n-gpu-layers` sweep on M4 beats the naive
+  "offload everything" (999) setting used in the gpt-oss-20b run above~~ --
+  tooling added 2026-11-01: `metal-assess.sh tune` now sweeps `NGL_VALUES`
+  (default `999 20 16 12 8`) the same way `t4-coder.sh tune` sweeps
+  `N_CPU_MOE`, benchmarks each with the same prefill-heavy ~2K-token
+  payload, and saves the fastest-decode value to a new `metal-config.env`
+  that `assess` now reads instead of hardcoding 999. Not yet actually run
+  on the M4 -- the question of whether a non-999 value wins there is still
+  open until that happens.
 - Whether the USA/Europe-only model-provenance constraint (A40 section
   above) should eventually become a project-wide policy that also covers
   the T4's existing Qwen3.6 setup, or stays scoped to new machines only --
