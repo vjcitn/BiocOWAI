@@ -176,6 +176,46 @@ binary detection) on this machine's Apple M4; the OpenCode branch's
 to run arbitrary third-party install scripts) but its config-writing logic
 is the same proven pattern as Pi's.
 
+### Early Metal assessment (2026-10-31)
+
+Before designing phases 4/5 for Apple Silicon by analogy with the CUDA/T4
+path, `inst/scripts/metal-assess.sh` was written and run end-to-end on this
+project's actual M4 (32 GB unified memory) to get real numbers instead of
+assumptions:
+
+- `llama.cpp` built cleanly with `-DGGML_METAL=ON` using Xcode's AppleClang
+  + cmake via Homebrew; no CUDA-path dependencies apply (no `nvcc`, no
+  CUDA-toolkit pinning).
+- A modest single-file quant (`Qwen2.5-7B-Instruct`, Q3_K_M, ~3.8 GB) was
+  used deliberately instead of the 35B MoE class `t4-coder.sh` targets, to
+  keep this first pass fast; most of that HF repo's larger quants
+  (Q4_K_M/Q4_0/Q5/Q6/Q8) are shipped as multi-file shards, which is itself
+  a phase-4 consideration (multi-shard download is more involved than
+  `t4-coder.sh`'s single-file `hf_hub_download`).
+- With all layers offloaded to the GPU (`--n-gpu-layers 999`): ~48 tok/s
+  prompt processing, ~18 tok/s token generation, negligible resident-memory
+  growth (expected — a 3.8 GB model is a rounding error against 32 GB
+  unified memory).
+- Two bugs found and fixed during this exercise, both now fixed in
+  `metal-assess.sh` and `harness-install.sh`: (1) an unbraced `$VAR`
+  immediately followed by the unicode ellipsis in log strings was
+  misparsed as part of the variable name under this shell/locale
+  (`${VAR}…` fixed it; the same latent bug still exists in `t4-coder.sh`,
+  noted but not fixed here since that file is out of this round's scope);
+  (2) the assumed GGUF filename convention didn't match the real
+  Hugging Face repo (hyphens vs underscores, and quant availability as
+  single-file vs multi-shard varies by repo and has to be checked, not
+  assumed).
+
+This answers the open questions the script posed going in: at 32 GB
+unified memory, a small-to-mid single-file model is comfortable headroom,
+but the 35B MoE class remains untested here and multi-shard download
+support would be needed to reach the larger quants on this same repo —
+both real inputs for phase 4's model-selection guidance, not resolved by
+this pass. Whether `--n-gpu-layers 999` is actually optimal (vs. a Metal-
+side tuning sweep analogous to `--n-cpu-moe`) is also still open; this
+pass used the naive "offload everything" setting and didn't sweep it.
+
 ## Consequences
 
 - `t4-coder.sh` becomes the T4 profile implementation under the new
