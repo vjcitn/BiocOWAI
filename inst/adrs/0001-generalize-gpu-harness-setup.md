@@ -628,6 +628,27 @@ line, masking this. Fixed by having `cuda-assess.sh` source
 report reflects the actually-saved config regardless of how the script
 was invoked.
 
+### `CUDA_ARCH` auto-detected via `nvidia-smi` instead of persisted (2026-11-01)
+
+Moving back to the A40 after the A100 run surfaced one more consequence
+of the shared `$LLM_HOME`: `config.env` had been saved with the A100's
+`CUDA_ARCH=80`, and switching hosts without explicitly overriding it
+would have silently pointed the A40 at `build-sm80` -- the same wrong-
+architecture crash as before, now from stale config rather than a
+shared build directory.
+
+`CUDA_ARCH` is a property of the physical card, not a saved preference
+like `ALIAS`/`N_CPU_MOE`, so it shouldn't come from a config file at
+all. Added `detect_cuda_arch()` to `t4-coder.sh`, using the same
+`nvidia-smi --query-gpu=compute_cap` -> arch mapping `gpu-detect.sh`
+already used (75=T4, 80=A100, 86=A40/A6000, 89=L4/L40, 90=H100), and
+made it the default when `CUDA_ARCH` isn't explicitly passed. Any value
+sourced from an old `config.env` is now ignored unless it actually came
+from the invocation's own environment, and `save_config()` no longer
+writes `CUDA_ARCH` at all. An explicit `CUDA_ARCH=<n>` override still
+wins over detection, for a card not in the table or a deliberate
+mismatch test.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
