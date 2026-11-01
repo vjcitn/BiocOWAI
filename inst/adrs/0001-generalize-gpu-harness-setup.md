@@ -722,6 +722,19 @@ locally. The wrapper looks for the CBBBioc git checkout at `$CBB_DIR`
 in this harness. Model defaults to `llama-cpp/gpt-oss-20b`, matching the
 alias the A100's own `t4-coder.sh install` wrote.
 
+Ran clean on the bare-metal A100 (host `chandl03`) the same day: all
+three questions completed with no errors, each fetching its own file via
+BiocFileCache from `BiocCBBData` on first use (`adding rname
+'https://mghp.osn.xsede.org/...'`) and producing a final one-line
+answer -- `bedtools-ops-q1` (111424282, 102.1s), `covid-patient-q1`
+(comma-separated donor list, 359.4s -- the slowest, consistent with its
+larger `.h5ad` input and highest input-token count of the three,
+10589), `gtf-5-utr-median-len-q1` (133;1296;1050, 83.0s). No correctness
+claim is being made here (`v1qs` has no ground-truth column, as noted
+above) -- this just confirms the CBBBioc-on-A100 pipeline itself works
+end to end: install, file staging, Pi invocation, and answer/usage
+parsing.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
