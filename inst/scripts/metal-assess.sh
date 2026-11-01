@@ -10,11 +10,16 @@
 # `--n-cpu-moe`-style offload concept, and different unit CUDA-arch flags).
 #
 # Mirrors t4-coder.sh's shape (preflight -> build -> download -> serve ->
-# bench -> stop) but only the parts that matter for a first look; it does
-# not attempt t4-coder.sh's full tune() sweep.
+# bench -> stop), including a tune() sweep analogous to CUDA's --n-cpu-moe
+# sweep -- here over --n-gpu-layers, since Metal has no CPU-offload-the-MoE-
+# experts knob, but llama.cpp's generic --n-gpu-layers (how many transformer
+# blocks run on GPU vs. CPU) is the closest equivalent on this backend, and
+# ADR 0001 explicitly left open whether the naive --n-gpu-layers 999 (all)
+# default is actually fastest on unified memory.
 #
 # Usage:
 #   ./metal-assess.sh assess     # build + download + serve + bench + report
+#   ./metal-assess.sh tune       # sweep NGL_VALUES, save the fastest
 #   ./metal-assess.sh stop       # stop a server left running by `assess`
 #
 # Env overrides:
@@ -30,6 +35,13 @@
 #     finding), unlike the first assessment pass's placeholder 7B Qwen
 #     model, which was only a quick look at Metal build/serve mechanics.
 #   CTX=8192                       context size for the assessment server
+#   N_GPU_LAYERS=999                --n-gpu-layers for `assess`'s server; overridden by
+#                                   whatever `tune` last saved to metal-config.env, same
+#                                   as t4-coder.sh's N_CPU_MOE/config.env relationship --
+#                                   an explicit env override here still wins over that.
+#   NGL_VALUES="999 20 16 12 8"    candidate --n-gpu-layers values `tune` sweeps; gpt-oss-20b
+#                                   has 24 transformer blocks, so these span full offload down
+#                                   to a third on CPU. Pass a tighter/wider set for another model.
 #   SKIP_BUILD=0 / SKIP_DOWNLOAD=0 set to 1 to reuse a prior build/model
 #   CMAKE_BIN (required, no default)   full path to the cmake binary this
 #     script should use to configure/build llama.cpp. This script never
@@ -44,10 +56,15 @@
 set -euo pipefail
 
 LLM_HOME="${LLM_HOME:-$HOME/llm}"
+CONFIG="$LLM_HOME/metal-config.env"
+# shellcheck source=/dev/null
+[[ -f "$CONFIG" ]] && source "$CONFIG"   # written as ": ${VAR:=value}", so env vars win
+
 PORT="${PORT:-8182}"
 MODEL_REPO="${MODEL_REPO:-ggml-org/gpt-oss-20b-GGUF}"
 MODEL_FILE="${MODEL_FILE:-gpt-oss-20b-MXFP4.gguf}"
 CTX="${CTX:-8192}"
+N_GPU_LAYERS="${N_GPU_LAYERS:-999}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-0}"
 CMAKE_BIN="${CMAKE_BIN:-}"
@@ -56,6 +73,11 @@ LLAMA_DIR="$LLM_HOME/llama.cpp"
 MODEL_PATH="$LLM_HOME/models/$MODEL_FILE"
 PID_FILE="$LLM_HOME/metal-assess.pid"
 LOG_FILE="$LLM_HOME/metal-assess.log"
+
+save_config() {
+  mkdir -p "$LLM_HOME"
+  printf ': "${N_GPU_LAYERS:=%s}"\n' "$N_GPU_LAYERS" > "$CONFIG"
+}
 
 log()  { printf '\033[1;35m[metal-assess]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[metal-assess] WARNING:\033[0m %s\n' "$*" >&2; }
@@ -133,29 +155,38 @@ PY
 # ----------------------------------------------------------- serve
 is_running() { [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; }
 
+server_cmd() {  # $1 = port, $2 = n-gpu-layers
+  SERVER_CMD=(
+    "$LLAMA_DIR/build/bin/llama-server"
+    --model "$MODEL_PATH"
+    --port "$1"
+    --ctx-size "$CTX"
+    --n-gpu-layers "$2"
+  )
+}
+
+wait_healthy() {  # $1 = port, $2 = pid, $3 = timeout seconds
+  local t=0
+  until curl -fsS "http://127.0.0.1:$1/health" >/dev/null 2>&1; do
+    kill -0 "$2" 2>/dev/null || return 1
+    (( t >= $3 )) && return 1
+    sleep 2; t=$((t + 2))
+  done
+}
+
 start_server() {
   if is_running; then
     log "Server already running (pid $(cat "$PID_FILE"))."
     return
   fi
-  log "Starting llama-server on 127.0.0.1:$PORT (ctx=$CTX, all layers on GPU via Metal)…"
-  nohup "$LLAMA_DIR/build/bin/llama-server" \
-    --model "$MODEL_PATH" \
-    --port "$PORT" \
-    --ctx-size "$CTX" \
-    --n-gpu-layers 999 \
-    > "$LOG_FILE" 2>&1 &
+  log "Starting llama-server on 127.0.0.1:$PORT (ctx=$CTX, n-gpu-layers=$N_GPU_LAYERS)…"
+  server_cmd "$PORT" "$N_GPU_LAYERS"
+  nohup "${SERVER_CMD[@]}" > "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
 
-  log "Waiting for health check…"
-  local tries=0
-  until curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; do
-    sleep 2
-    tries=$(( tries + 1 ))
-    if (( tries > 60 )); then
-      die "Server did not become healthy within 2 minutes; see $LOG_FILE"
-    fi
-  done
+  if ! wait_healthy "$PORT" "$(cat "$PID_FILE")" 120; then
+    die "Server did not become healthy within 2 minutes; see $LOG_FILE"
+  fi
   log "Server healthy (pid $(cat "$PID_FILE"))."
 }
 
@@ -194,7 +225,7 @@ bench() {
 
   echo
   log "=== Metal assessment report ==="
-  log "Model: $MODEL_REPO/$MODEL_FILE, ctx=$CTX, n-gpu-layers=999 (all)"
+  log "Model: $MODEL_REPO/$MODEL_FILE, ctx=$CTX, n-gpu-layers=$N_GPU_LAYERS"
   log "Prompt processing: ${pp_tps} tok/s (${pp_n} tokens in ${pp_ms} ms)"
   log "Token generation:  ${tg_tps} tok/s (${tg_n} tokens in ${tg_ms} ms)"
   log "Active pages before/after (4KB pages, rough proxy for RSS growth): $mem_before -> $mem_after"
@@ -203,13 +234,51 @@ bench() {
   log "Open questions this should inform (ADR 0001 phase 4/5):"
   log "  - Does gpt-oss-20b (this machine's actual target model, matching the fork's"
   log "    PiProvider ollama/gpt-oss:20b alias) deliver usable interactive throughput at"
-  log "    full GPU offload, or does it need context/offload tuning to feel responsive?"
-  log "  - Is --n-gpu-layers 999 (all layers on GPU) actually optimal here, or does holding"
-  log "    some layers back change throughput -- i.e. is there a Metal-side tuning knob"
-  log "    worth a phase-5 sweep, analogous to --n-cpu-moe on CUDA?"
+  log "    n-gpu-layers=$N_GPU_LAYERS, or does it need context/offload tuning to feel responsive?"
+  log "  - Run './metal-assess.sh tune' to check whether another --n-gpu-layers value beats this one."
 }
 
-usage() { die "Usage: $0 {assess|stop}"; }
+# ----------------------------------------------------------- tune
+cmd_tune() {
+  is_running && die "Stop the main server first (./metal-assess.sh stop); tuning needs the whole GPU."
+  local candidates tport=8193 best="" best_tg=0
+  read -r -a candidates <<<"${NGL_VALUES:-999 20 16 12 8}"
+  mkdir -p "$LLM_HOME"
+  # ~2K-token prompt so prefill speed is measured too; agent loops are prefill-heavy
+  local payload
+  payload=$(python3 -c '
+import json
+code = "def f(x):\n    return [i * x for i in range(10) if i % 2 == 0]\n" * 120
+print(json.dumps({"prompt": "Review this code and suggest improvements:\n" + code,
+                  "n_predict": 128, "temperature": 0, "cache_prompt": False}))')
+  printf '%-14s %-12s %-12s\n' n-gpu-layers "prefill t/s" "decode t/s"
+  for n in "${candidates[@]}"; do
+    server_cmd "$tport" "$n"
+    "${SERVER_CMD[@]}" > "$LLM_HOME/metal-tune-$n.log" 2>&1 &
+    local pid=$!
+    if ! wait_healthy "$tport" "$pid" 120; then
+      kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
+      printf '%-14s %s\n' "$n" "failed to load; see $LLM_HOME/metal-tune-$n.log"
+      continue
+    fi
+    local res pp tg
+    res=$(curl -fsS "http://127.0.0.1:$tport/completion" -H 'Content-Type: application/json' -d "$payload" || echo '{}')
+    pp=$(echo "$res" | python3 -c "import json,sys; t=json.load(sys.stdin).get('timings',{}); print(round(t.get('prompt_per_second',0)))" 2>/dev/null || echo 0)
+    tg=$(echo "$res" | python3 -c "import json,sys; t=json.load(sys.stdin).get('timings',{}); print(round(t.get('predicted_per_second',0),1))" 2>/dev/null || echo 0)
+    kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
+    printf '%-14s %-12s %-12s\n' "$n" "$pp" "$tg"
+    if python3 -c "import sys; sys.exit(0 if float('$tg') > float('$best_tg') else 1)"; then
+      best=$n; best_tg=$tg
+    fi
+  done
+  [[ -n "$best" ]] || die "No setting loaded. Try NGL_VALUES=\"24 16 8\" or a smaller CTX."
+  N_GPU_LAYERS="$best"
+  save_config
+  log "Fastest was n-gpu-layers=$best (${best_tg} t/s decode). Saved N_GPU_LAYERS=$best."
+  log "Next: ./metal-assess.sh assess"
+}
+
+usage() { die "Usage: $0 {assess|tune|stop}"; }
 
 main() {
   local cmd="${1:-}"
@@ -221,6 +290,10 @@ main() {
       download_model
       start_server
       bench
+      ;;
+    tune)
+      preflight
+      cmd_tune
       ;;
     stop) stop_server ;;
     *) usage ;;
