@@ -303,10 +303,19 @@ comparable to the M4's ~35 tok/s generation on gpt-oss-20b, despite
 Qwen3.6-35B-A3B being a much larger model running with its MoE experts
 partly offloaded to CPU RAM rather than fully GPU-resident -- a good sign
 that `--n-cpu-moe` offload is doing its job. Confirms the "does the
-harness-serving pipeline work end to end on T4" question: yes. (This run
-used the default `N_CPU_MOE=22`, not a `tune` sweep, so whether a
-different split pushes throughput higher is still open, same as the M4
-Metal-layer-offload question above.)
+harness-serving pipeline work end to end on T4" question: yes.
+
+**`tune` sweep run (2026-11-01):** `TUNE_VALUES` default (`16 20 24 28
+32`) against the same 15360 MiB T4. `n-cpu-moe=16` OOM'd (card was
+already at 12431 MiB used at 22); `20` was fastest (256 prefill t/s, 31.2
+decode t/s, 13337 MiB); throughput fell off monotonically moving more
+experts to CPU (24 → 29.7 t/s, 28 → 27.4 t/s, 32 → 25.6 t/s, each using
+proportionally less VRAM). `tune` saved `N_CPU_MOE=22` (fastest + 2, for
+context headroom) — which is exactly the value already in use for the
+31.2 tok/s result above. So that earlier number wasn't an arbitrary
+default landing well; it's confirmed as ~the ceiling for this
+model/card/context-size combination. The `--n-cpu-moe` sweep question is
+now closed for T4; the M4 `--n-gpu-layers` sweep remains open.
 
 ## Consequences
 
@@ -358,6 +367,7 @@ Metal-layer-offload question above.)
   the fail-fast and pass-through paths in isolation (extracted function
   bodies run standalone, since this machine has no CUDA/apt to test
   against directly). Not yet exercised on an actual no-sudo T4 host.
-- Whether a `tune`-style `--n-cpu-moe` sweep on T4 beats the default 22
-  used in the 2026-11-01 run above (31.2 tok/s generation) -- not yet
-  swept, same open question as the M4's untried `--n-gpu-layers` sweep.
+- Whether a Metal-side `--n-gpu-layers` sweep on M4 beats the naive
+  "offload everything" (999) setting used in the gpt-oss-20b run above --
+  the T4 analog of this question (`--n-cpu-moe`) is now closed, see the
+  `tune` sweep result just above.
