@@ -259,6 +259,44 @@ this pass. Whether `--n-gpu-layers 999` is actually optimal (vs. a Metal-
 side tuning sweep analogous to `--n-cpu-moe`) is also still open; this
 pass used the naive "offload everything" setting and didn't sweep it.
 
+### T4/CUDA companion script: cuda-assess.sh (2026-11-01, not yet run)
+
+Added `inst/scripts/cuda-assess.sh` as the T4 analog of `metal-assess.sh`,
+but it deliberately does not duplicate `t4-coder.sh`'s build/download
+logic: it drives `t4-coder.sh install` and `t4-coder.sh start` (already
+T4-validated: CUDA build at `sm_75`, CUDA toolkit pinned to 12.8,
+`unsloth/Qwen3.6-35B-A3B-GGUF` at `UD-Q4_K_XL`, ~22 GB, matching the
+fork's `llama-cpp/qwen3.6-35b-a3b` `PiProvider` alias), then adds the one
+piece `t4-coder.sh` doesn't have: a single-shot `/completion` benchmark
+and report in the same format `metal-assess.sh` used, so M4 and T4 numbers
+are directly comparable.
+
+This was a deliberate reuse decision, not an oversight: `t4-coder.sh`'s
+CUDA/apt/model-download logic is already working and already exercised by
+real users, so reimplementing it here would only risk reintroducing a bug
+already found and fixed elsewhere in this pass — the unbraced-`$VAR`-
+before-ellipsis bash parsing quirk, which is fixed in `metal-assess.sh`
+and `harness-install.sh` but **still present, unfixed, in `t4-coder.sh`
+itself at lines 148 and 163** (noted when first found, carried forward as
+a known, currently out-of-scope issue).
+
+The cmake-policy question (no package-manager fallback, require an
+explicit path) was deliberately **not** carried over to the T4/Linux side
+in this pass. The rationale the user gave for the Mac policy was specific
+to this machine's dual toolchain (Homebrew vs. Bioconductor-managed
+cmake); `t4-coder.sh`'s existing `sudo apt-get`/CUDA-toolkit install path
+predates that policy and runs on disposable cloud GPU instances rather
+than a personal dev workstation with a competing R/Bioconductor
+toolchain, so the conflict risk that motivated the Mac change doesn't
+obviously apply. Left as an open question below rather than assumed
+either way, since changing it would mean editing already-working,
+already-used code without being able to test the result locally.
+
+**Not yet run** — this session has no T4/CUDA host access. The script is
+written and syntax-checked (`bash -n`) only; it needs to be run on an
+actual T4 host and the results reported back before this section can be
+updated with real numbers, the way the M4 section above was.
+
 ## Consequences
 
 - `t4-coder.sh` becomes the T4 profile implementation under the new
@@ -292,3 +330,12 @@ pass used the naive "offload everything" setting and didn't sweep it.
   through CBBBioc's direct-driving path indefinitely.
 - Whether `vjcitn/compbiobench-runner` stays a long-lived fork or its
   `PiProvider` work gets proposed upstream to Genentech at some point.
+- Whether the "no package-manager fallback, require an explicit path" cmake
+  policy (M4/Homebrew, above) should extend to `t4-coder.sh`'s `sudo
+  apt-get`/CUDA-toolkit install steps on the T4/Linux side, or whether that
+  policy is specifically a personal-workstation/dual-toolchain concern that
+  doesn't apply to disposable cloud GPU instances. Not decided; flagged
+  alongside `cuda-assess.sh`, not resolved by it.
+- Real T4 numbers from `cuda-assess.sh` once it's been run on an actual T4
+  host (this session has none) — needed to fill in the comparison the
+  script's report references against the M4 gpt-oss-20b numbers above.
