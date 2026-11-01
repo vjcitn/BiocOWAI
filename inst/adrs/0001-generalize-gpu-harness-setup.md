@@ -701,6 +701,27 @@ MoE layers. The host also logged `RAM: 29 GB` against t4-coder.sh's own
 candidate explanation if this host ever behaves erratically under
 load.
 
+### CBBBioc example-running tooling added for the bare-metal A100 (2026-11-01)
+
+`CBBBioc::cbb_run_question()` talks to the served model by shelling out to
+the `pi` CLI, not by making an HTTP call directly -- so it depends on
+whatever `~/.pi/agent/models.json` `t4-coder.sh install` already wrote on
+*that* host (provider `llama-cpp`, `baseUrl` `http://127.0.0.1:<port>/v1`,
+model id = `$ALIAS`, e.g. `gpt-oss-20b`). That ties CBBBioc's R session to
+running on the same host as the `llama-server` it's driving (or to a
+`models.json` edited by hand to point `baseUrl` at a reachable remote
+host) -- there's no "point CBBBioc at a different machine" flag.
+
+Added `vjcitn/CBBBioc`'s `inst/scripts/run-v1qs-examples.sh` (+ a
+companion `.R` script) to run a small 3-question sample of the `v1qs`
+question set through `cbb_run_question()` against whatever's being served
+locally. The wrapper looks for the CBBBioc git checkout at `$CBB_DIR`
+(default `$HOME/CBBBioc`) -- on the A100 this should be set to wherever
+`CBBBioc` was actually cloned on that host if it isn't literally
+`$HOME/CBBBioc`, the same way `$LLM_HOME` already needs setting per-host
+in this harness. Model defaults to `llama-cpp/gpt-oss-20b`, matching the
+alias the A100's own `t4-coder.sh install` wrote.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
