@@ -576,6 +576,27 @@ shared namespace). Not hit yet because usage so far has been strictly
 sequential (stop one host's server before moving to the next), but worth
 fixing if concurrent multi-host use of one `$LLM_HOME` is ever expected.
 
+### Rebuild attempt hit a second, unrelated `$SRC` collision on the shared home (2026-11-01)
+
+Retrying with `REBUILD=1 CUDA_ARCH=80 ./t4-coder.sh install` to pick up
+the arch-specific build dir, `git clone` itself failed: "destination
+path '...src/llama.cpp' already exists and is not an empty directory."
+`ls` showed `AGENTS.md` and an `app/` directory dated Oct 6/15 -- weeks
+before any work in this ADR, and not a `.git` in sight. Confirmed by
+reading `AGENTS.md` (matched upstream llama.cpp's actual file) that this
+was genuine llama.cpp source the user had placed there weeks earlier
+while experimenting, just without git metadata (e.g. a zip/tarball
+extract rather than `git clone`) -- coincidentally colliding with this
+project's chosen path on the same shared `/udd/stvjc` NFS home.
+
+`build_llama_cpp()`'s clone-vs-update branch only handled "has `.git`"
+or "doesn't exist," not "exists, non-git, unexplained contents." Given
+the ambiguity, the fix does not delete: a non-git `$SRC` is renamed
+aside to `llama.cpp.not-llama-cpp.<timestamp>` and left for the user to
+inspect/remove by hand, then a fresh clone proceeds. Confirmed safe
+after the fact in this instance, but the move-aside behavior holds
+regardless of what the directory turns out to contain next time.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
