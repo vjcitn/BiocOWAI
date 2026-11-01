@@ -167,6 +167,14 @@ build_llama_cpp() {
     log "Updating llama.cpp…"
     git -C "$SRC" fetch -q --all --tags
   else
+    if [[ -e "$SRC" ]]; then
+      local moved="$SRC.not-llama-cpp.$(date +%s)"
+      warn "$SRC exists but isn't a git checkout (no .git) -- moving it aside to" \
+           "$moved rather than deleting it, since its contents are unexplained, and" \
+           "cloning fresh instead. Inspect/remove $moved by hand once you've confirmed" \
+           "it's safe to."
+      mv "$SRC" "$moved"
+    fi
     log "Cloning llama.cpp…"
     git clone -q https://github.com/ggml-org/llama.cpp "$SRC"
   fi
