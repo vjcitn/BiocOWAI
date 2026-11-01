@@ -184,8 +184,10 @@ project's actual M4 (32 GB unified memory) to get real numbers instead of
 assumptions:
 
 - `llama.cpp` built cleanly with `-DGGML_METAL=ON` using Xcode's AppleClang
-  + cmake via Homebrew; no CUDA-path dependencies apply (no `nvcc`, no
-  CUDA-toolkit pinning).
+  + cmake; no CUDA-path dependencies apply (no `nvcc`, no CUDA-toolkit
+  pinning). The first pass installed `cmake` via Homebrew when none was on
+  `PATH` — this was corrected (see "cmake policy" below) once it became
+  clear that was a real conflict risk, not a hypothetical one.
 - A modest single-file quant (`Qwen2.5-7B-Instruct`, Q3_K_M, ~3.8 GB) was
   used deliberately instead of the 35B MoE class `t4-coder.sh` targets, to
   keep this first pass fast; most of that HF repo's larger quants
@@ -206,6 +208,47 @@ assumptions:
   Hugging Face repo (hyphens vs underscores, and quant availability as
   single-file vs multi-shard varies by repo and has to be checked, not
   assumed).
+
+### cmake policy: no package-manager fallback (2026-11-01)
+
+The first assessment pass's `ensure_build_deps()` installed `cmake` via
+Homebrew when none was found on `PATH`. The user flagged this as a real
+conflict risk, not a hypothetical one: this is a bioinformatics
+development machine that already carries an R/Bioconductor-managed cmake
+(e.g. `~/Library/Caches/org.R-project.R/R/biocmake/<ver>/CMake.app/Contents/bin/cmake`),
+and a second cmake landing on `PATH` from a package manager can shadow or
+conflict with source builds that expect that specific one.
+
+**Fixed:** `metal-assess.sh` no longer touches Homebrew (or any package
+manager) at all. It requires `CMAKE_BIN` to be set to an explicit,
+executable cmake path and fails immediately with a clear message if it
+isn't — no default, no installation, no PATH search. The Homebrew `cmake`
+formula installed during the first pass was uninstalled; verified the
+script subsequently fails correctly with `CMAKE_BIN` unset, and succeeds
+using the user's actual Bioconductor-managed cmake (4.4.2) pointed at
+explicitly, with consistent benchmark results.
+
+**Lesson applied going forward:** a "just install what's missing" default
+is wrong on a machine with other toolchains that care which binary of a
+given name is in play (compilers, cmake, python, etc.) — default to
+requiring an explicit path from the user rather than reaching for a
+package manager, on this project.
+
+### Target model for M4: gpt-oss-20b (2026-11-01)
+
+The Qwen2.5-7B placeholder used for the first Metal pass was replaced with
+this machine's actual target model: `gpt-oss-20b`, native MXFP4 quant
+(`ggml-org/gpt-oss-20b-GGUF`, single file, ~12.1 GB) — matching the
+`ollama/gpt-oss:20b` alias the compbiobench-runner fork's `PiProvider`
+already references (see the Phase 2 finding above). With `--n-gpu-layers
+999` (full GPU offload) and `--ctx-size 8192`: ~48-69 tok/s prompt
+processing, ~35 tok/s token generation, consistent across repeated runs
+and across the Homebrew-cmake and Bioconductor-cmake builds. 35 tok/s
+generation is comfortably interactive for a coding-agent harness. This is
+still a single-request measurement, not a sweep (see open questions
+above) — a real phase-5 tuning pass would still check whether holding
+some layers off-GPU changes throughput, but the "does the target model
+even run well here" question for M4 is now answered: yes.
 
 This answers the open questions the script posed going in: at 32 GB
 unified memory, a small-to-mid single-file model is comfortable headroom,

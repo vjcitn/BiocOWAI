@@ -21,27 +21,36 @@
 #   LLM_HOME=$HOME/llm             working dir (llama.cpp checkout, model, logs)
 #   PORT=8182                      llama-server port (8182, not t4-coder.sh's
 #                                   8181, so both can coexist on one machine)
-#   MODEL_REPO=Qwen/Qwen2.5-7B-Instruct-GGUF
-#   MODEL_FILE=qwen2.5-7b-instruct-q3_k_m.gguf
-#     Deliberately a modest 7B Q3 single-file quant (~3.8 GB), not the 35B
-#     MoE t4-coder.sh targets -- this is a quick look at Metal behavior,
-#     not a target-model recommendation (that's phase 4's job, informed by
-#     what this script reports about memory/throughput). This repo's
-#     q4_k_m/q4_0/q5/q6/q8 quants are all split into multiple shards; q3_k_m
-#     is the largest single-file quant it ships, which keeps the download
-#     step a plain hf_hub_download instead of a multi-file fetch.
+#   MODEL_REPO=ggml-org/gpt-oss-20b-GGUF
+#   MODEL_FILE=gpt-oss-20b-MXFP4.gguf
+#     gpt-oss-20b in its native MXFP4 quant (~12.1 GB, single file). This
+#     is the actual target model for this machine (32 GB unified memory):
+#     it matches the "ollama/gpt-oss:20b" alias already referenced by the
+#     compbiobench-runner fork's PiProvider (see ADR 0001's phase 2
+#     finding), unlike the first assessment pass's placeholder 7B Qwen
+#     model, which was only a quick look at Metal build/serve mechanics.
 #   CTX=8192                       context size for the assessment server
 #   SKIP_BUILD=0 / SKIP_DOWNLOAD=0 set to 1 to reuse a prior build/model
+#   CMAKE_BIN (required, no default)   full path to the cmake binary this
+#     script should use to configure/build llama.cpp. This script never
+#     installs or falls back to a package-manager cmake (e.g. Homebrew) --
+#     a bioinformatics dev machine commonly already has a cmake managed
+#     for R/Bioconductor source builds (e.g.
+#     ~/Library/Caches/org.R-project.R/R/biocmake/<ver>/CMake.app/Contents/bin/cmake)
+#     and a second cmake on PATH from a package manager risks shadowing or
+#     conflicting with that. Point CMAKE_BIN at whichever cmake you want
+#     this build to use; the script fails immediately if it's unset.
 
 set -euo pipefail
 
 LLM_HOME="${LLM_HOME:-$HOME/llm}"
 PORT="${PORT:-8182}"
-MODEL_REPO="${MODEL_REPO:-Qwen/Qwen2.5-7B-Instruct-GGUF}"
-MODEL_FILE="${MODEL_FILE:-qwen2.5-7b-instruct-q3_k_m.gguf}"
+MODEL_REPO="${MODEL_REPO:-ggml-org/gpt-oss-20b-GGUF}"
+MODEL_FILE="${MODEL_FILE:-gpt-oss-20b-MXFP4.gguf}"
 CTX="${CTX:-8192}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-0}"
+CMAKE_BIN="${CMAKE_BIN:-}"
 
 LLAMA_DIR="$LLM_HOME/llama.cpp"
 MODEL_PATH="$LLM_HOME/models/$MODEL_FILE"
@@ -66,12 +75,9 @@ preflight() {
 # ------------------------------------------------------------- build deps
 ensure_build_deps() {
   xcode-select -p >/dev/null 2>&1 || die "Xcode command line tools not installed. Run: xcode-select --install"
-  if ! command -v cmake >/dev/null 2>&1; then
-    command -v brew >/dev/null 2>&1 || die "cmake not found and Homebrew not available to install it."
-    log "Installing cmake via Homebrew…"
-    brew install cmake
-  fi
-  log "cmake: $(cmake --version | head -1)"
+  [[ -n "$CMAKE_BIN" ]] || die "CMAKE_BIN is not set. Point it at the cmake you want this build to use (e.g. a Bioconductor-managed one under ~/Library/Caches/org.R-project.R/R/biocmake/<ver>/CMake.app/Contents/bin/cmake, or any other) -- this script will not install or assume one."
+  [[ -x "$CMAKE_BIN" ]] || die "CMAKE_BIN='$CMAKE_BIN' is not an executable file."
+  log "cmake: $("$CMAKE_BIN" --version | head -1) ($CMAKE_BIN)"
 }
 
 # ------------------------------------------------------- build llama.cpp
@@ -91,10 +97,10 @@ build_llama_cpp() {
   fi
 
   log "Configuring with -DGGML_METAL=ON (Release)…"
-  cmake -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON
+  "$CMAKE_BIN" -S "$LLAMA_DIR" -B "$LLAMA_DIR/build" -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON
 
   log "Building (this is the slow step; using $(sysctl -n hw.ncpu) cores)…"
-  cmake --build "$LLAMA_DIR/build" -j "$(sysctl -n hw.ncpu)" --target llama-server
+  "$CMAKE_BIN" --build "$LLAMA_DIR/build" -j "$(sysctl -n hw.ncpu)" --target llama-server
 
   [[ -x "$LLAMA_DIR/build/bin/llama-server" ]] || die "Build finished but llama-server binary not found."
   log "Built: $LLAMA_DIR/build/bin/llama-server"
@@ -114,7 +120,7 @@ download_model() {
   command -v python3 >/dev/null 2>&1 || die "python3 required to fetch the model via huggingface_hub."
   python3 -c "import huggingface_hub" 2>/dev/null || python3 -m pip install --quiet "huggingface_hub[hf_xet]"
 
-  log "Downloading $MODEL_REPO/$MODEL_FILE (~3.8 GB) into ${LLM_HOME}/models…"
+  log "Downloading $MODEL_REPO/$MODEL_FILE (~12.1 GB) into ${LLM_HOME}/models…"
   python3 - "$MODEL_REPO" "$MODEL_FILE" "$LLM_HOME/models" <<'PY'
 import sys
 from huggingface_hub import hf_hub_download
@@ -195,9 +201,9 @@ bench() {
   log "Full server log: $LOG_FILE"
   echo
   log "Open questions this should inform (ADR 0001 phase 4/5):"
-  log "  - Does a 35B MoE model (t4-coder.sh's target class) fit usefully in this machine's"
-  log "    unified memory alongside the OS and other apps, or does phase 4 need a smaller"
-  log "    class of model for M4 specifically?"
+  log "  - Does gpt-oss-20b (this machine's actual target model, matching the fork's"
+  log "    PiProvider ollama/gpt-oss:20b alias) deliver usable interactive throughput at"
+  log "    full GPU offload, or does it need context/offload tuning to feel responsive?"
   log "  - Is --n-gpu-layers 999 (all layers on GPU) actually optimal here, or does holding"
   log "    some layers back change throughput -- i.e. is there a Metal-side tuning knob"
   log "    worth a phase-5 sweep, analogous to --n-cpu-moe on CUDA?"
