@@ -317,6 +317,55 @@ default landing well; it's confirmed as ~the ceiling for this
 model/card/context-size combination. The `--n-cpu-moe` sweep question is
 now closed for T4; the M4 `--n-gpu-layers` sweep remains open.
 
+### A40 access and model provenance constraint (2026-11-01)
+
+User gained access to a third machine: an NVIDIA A40 (compute capability
+8.6, `sm_86`, 46 GB VRAM) -- roughly 3x the T4's VRAM, Ampere generation.
+`gpu-detect.sh` already maps `8.6 -> sm_86 # e.g. A40/A6000` correctly
+(written ahead of actually having this hardware to test against), so
+phase 1 needed no change here; this is its first real validation beyond
+the T4.
+
+At the same time, the user set a new constraint: **only `gpt-oss-20b` or
+a related USA- or Europe-based open-weight model** may be used going
+forward. This directly conflicts with the T4's existing
+`unsloth/Qwen3.6-35B-A3B-GGUF` (Alibaba, China) -- flagged explicitly to
+the user rather than silently changing or silently leaving it. Decision:
+**the T4 stays on Qwen3.6 for now** (explicit user call, not resolved as
+a project-wide policy); the constraint applies to new setups, starting
+with the A40. This is now a second explicit go-forward constraint
+alongside the cmake policy above, and like that one, it is noted here
+rather than assumed to retroactively apply elsewhere.
+
+### CUDA_ARCH parameterized in t4-coder.sh (2026-11-01)
+
+The A40 run surfaced a real generalization gap `t4-coder.sh` had never
+been tested against: `-DCMAKE_CUDA_ARCHITECTURES=75` was hardcoded, and
+`preflight()` only warned (did not fail) on a non-T4 card -- so running
+it unmodified on the A40 would have silently built for the wrong
+architecture. Everything else in `t4-coder.sh` (`HF_REPO`, `QUANT`,
+`ALIAS`, `N_CPU_MOE`, harness install) was already env-parameterized, so
+rather than writing a fourth copy-pasted script, `CUDA_ARCH` (default
+`75`, matching `gpu-detect.sh`'s `cuda_arch` field with the `sm_` prefix
+stripped) was added as the one missing parameter. `preflight()`'s warning
+now also fires if `CUDA_ARCH` is still the default on a non-T4 card,
+rather than only checking the GPU name.
+
+Given the A40's 46 GB VRAM and the gpt-oss-20b/USA-Europe constraint
+above, the plan for this machine is: `CUDA_ARCH=86 HF_REPO=ggml-org/
+gpt-oss-20b-GGUF QUANT=MXFP4 ALIAS=gpt-oss-20b N_CPU_MOE=0 ./t4-coder.sh
+install` -- gpt-oss-20b (~12 GB) fits entirely GPU-resident in 46 GB with
+large headroom, so `N_CPU_MOE=0` (no MoE experts offloaded to CPU RAM)
+should be viable unlike the T4's forced partial offload. `cuda-assess.sh`
+needs no changes to drive this -- it already just forwards env vars to
+`t4-coder.sh install`/`start` and its benchmark/report logic is model-
+agnostic.
+
+**Not yet run** on the actual A40 -- `t4-coder.sh`'s edits are syntax-
+checked (`bash -n`) only; this needs a real run to confirm the gpt-oss-20b
+download, CUDA build at `sm_86`, and `N_CPU_MOE=0` serving actually work,
+and to get real throughput numbers alongside the M4 and T4 ones above.
+
 ## Consequences
 
 - `t4-coder.sh` becomes the T4 profile implementation under the new
@@ -371,3 +420,9 @@ now closed for T4; the M4 `--n-gpu-layers` sweep remains open.
   "offload everything" (999) setting used in the gpt-oss-20b run above --
   the T4 analog of this question (`--n-cpu-moe`) is now closed, see the
   `tune` sweep result just above.
+- Whether the USA/Europe-only model-provenance constraint (A40 section
+  above) should eventually become a project-wide policy that also covers
+  the T4's existing Qwen3.6 setup, or stays scoped to new machines only --
+  explicitly deferred, not decided.
+- Real A40 numbers once `cuda-assess.sh`/`t4-coder.sh install` has
+  actually been run there with `CUDA_ARCH=86` and gpt-oss-20b.

@@ -22,6 +22,13 @@
 # nvcc) aren't already on the box:
 #   SKIP_APT=1 SKIP_CUDA_TOOLKIT=1 ./t4-coder.sh install
 #
+# This script's defaults (model, CUDA_ARCH=75) target a T4 specifically, but
+# every build/serve step is parameterized -- on a different NVIDIA card, run
+# ./gpu-detect.sh first to get the right cuda_arch (strip the "sm_" prefix)
+# and pick a model/quant that fits the card's VRAM, e.g. on a 46 GB A40:
+#   CUDA_ARCH=86 HF_REPO=ggml-org/gpt-oss-20b-GGUF QUANT=MXFP4 \
+#     ALIAS=gpt-oss-20b N_CPU_MOE=0 ./t4-coder.sh install
+#
 # Everything lives under $LLM_HOME (default ~/llm) so it sits on the Terra persistent
 # disk. apt packages may need reinstalling if the cloud environment is recreated;
 # just re-run `install` (it skips finished steps).
@@ -46,6 +53,9 @@ THINK="${THINK:-1}"            # 1 = Qwen thinking mode (better plans), 0 = fast
 LLAMA_CPP_REF="${LLAMA_CPP_REF:-master}"
 SKIP_APT="${SKIP_APT:-0}"              # 1 = don't sudo apt-get; fail fast if required tools are missing
 SKIP_CUDA_TOOLKIT="${SKIP_CUDA_TOOLKIT:-0}"  # 1 = don't sudo-install cuda-toolkit; fail fast if nvcc is missing
+CUDA_ARCH="${CUDA_ARCH:-75}"    # CMAKE_CUDA_ARCHITECTURES value; 75=T4, 86=A40/A6000, 89=L4/L40,
+                                # 80=A100, 90=H100 -- see inst/scripts/gpu-detect.sh's cuda_arch field
+                                # (strip the "sm_" prefix it reports) for the right value on a new card
 
 SRC="$LLM_HOME/src/llama.cpp"
 BIN="$SRC/build/bin"
@@ -62,7 +72,7 @@ die()  { printf '\033[1;31m[t4-coder] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 save_config() {
   mkdir -p "$LLM_HOME"
   {
-    for v in HF_REPO QUANT ALIAS PORT CTX N_CPU_MOE HARNESS THINK; do
+    for v in HF_REPO QUANT ALIAS PORT CTX N_CPU_MOE HARNESS THINK CUDA_ARCH; do
       printf ': "${%s:=%s}"\n' "$v" "${!v}"
     done
   } > "$CONFIG"
@@ -77,7 +87,8 @@ preflight() {
   command -v nvidia-smi >/dev/null || die "nvidia-smi not found; is the GPU attached to this environment?"
   local gpu; gpu=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)
   log "GPU: $gpu"
-  [[ "$gpu" == *T4* ]] || warn "Not a T4; CUDA arch is set to 75 below, change CMAKE_CUDA_ARCHITECTURES if needed."
+  [[ "$gpu" == *T4* || "$CUDA_ARCH" != "75" ]] \
+    || warn "Not a T4 but CUDA_ARCH is still the default (75) -- set CUDA_ARCH to match this card (see gpu-detect.sh's cuda_arch field) or the build will target the wrong architecture."
 
   local ram_gb disk_gb
   ram_gb=$(awk '/MemTotal/ {printf "%d", $2/1024/1024}' /proc/meminfo)
@@ -148,13 +159,13 @@ build_llama_cpp() {
   git -C "$SRC" checkout -q "$LLAMA_CPP_REF"
   [[ "$LLAMA_CPP_REF" == master ]] && git -C "$SRC" pull -q --ff-only
 
-  log "Building llama.cpp for sm_75 (takes ~10-20 min on a few vCPUs)…"
+  log "Building llama.cpp for sm_${CUDA_ARCH} (takes ~10-20 min on a few vCPUs)…"
   local cuda_bin; cuda_bin=$(dirname "$NVCC")
   export PATH="$cuda_bin:$PATH"
   cmake -S "$SRC" -B "$SRC/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_CUDA=ON \
-    -DCMAKE_CUDA_ARCHITECTURES=75 \
+    -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" \
     -DCMAKE_CUDA_COMPILER="$NVCC" \
     -DBUILD_SHARED_LIBS=OFF > "$LOG_DIR/cmake.log"
   cmake --build "$SRC/build" --config Release -j "$(nproc)" \
@@ -173,7 +184,7 @@ download_model() {
     python3 -m venv "$VENV"
     "$VENV/bin/pip" install -q -U "huggingface_hub[hf_xet]"
   }
-  log "Downloading $HF_REPO ($QUANT, ~22 GB; resumable if interrupted)…"
+  log "Downloading $HF_REPO ($QUANT; resumable if interrupted)…"
   mkdir -p "$MODEL_DIR"
   "$VENV/bin/hf" download "$HF_REPO" --local-dir "$MODEL_DIR" --include "*${QUANT}*"
   [[ -n "$(model_path)" ]] || die "Download finished but no *${QUANT}*.gguf found in $MODEL_DIR"
