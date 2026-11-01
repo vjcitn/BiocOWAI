@@ -730,13 +730,27 @@ load.
   against directly). Not yet exercised on an actual no-sudo T4 host.
 - ~~Whether a Metal-side `--n-gpu-layers` sweep on M4 beats the naive
   "offload everything" (999) setting used in the gpt-oss-20b run above~~ --
-  tooling added 2026-11-01: `metal-assess.sh tune` now sweeps `NGL_VALUES`
-  (default `999 20 16 12 8`) the same way `t4-coder.sh tune` sweeps
-  `N_CPU_MOE`, benchmarks each with the same prefill-heavy ~2K-token
-  payload, and saves the fastest-decode value to a new `metal-config.env`
-  that `assess` now reads instead of hardcoding 999. Not yet actually run
-  on the M4 -- the question of whether a non-999 value wins there is still
-  open until that happens.
+  closed 2026-11-01. `metal-assess.sh tune` (added same day; sweeps
+  `NGL_VALUES`, same pattern as `t4-coder.sh tune`/`N_CPU_MOE`) ran on the
+  actual M4 (32 GB unified memory):
+
+  | n-gpu-layers | prefill t/s | decode t/s |
+  |---|---|---|
+  | 999 (all) | 382 | 33.5 |
+  | 20 | 230 | 28.1 |
+  | 16 | 142 | 25.6 |
+  | 12 | 97 | 21.5 |
+  | 8 | 79 | 20.0 |
+
+  Both prefill and decode degrade monotonically as more layers move to
+  CPU -- the naive full-offload default was already optimal, with no
+  partial-offload setting beating it. This makes sense in hindsight:
+  unlike CUDA's `N_CPU_MOE` (where partial offload is sometimes
+  *necessary* just to fit a model in limited VRAM), Metal's unified memory
+  means there's no capacity pressure forcing a tradeoff, and moving layers
+  to CPU only gives up the GPU's parallelism on them with no transfer-cost
+  saving to offset it. `N_GPU_LAYERS=999` is confirmed as the right
+  default for this backend, not just a convenient one.
 - Whether the USA/Europe-only model-provenance constraint (A40 section
   above) should eventually become a project-wide policy that also covers
   the T4's existing Qwen3.6 setup, or stays scoped to new machines only --
