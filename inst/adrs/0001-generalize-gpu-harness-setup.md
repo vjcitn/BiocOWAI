@@ -434,7 +434,29 @@ adding tuning for Metal (`--n-gpu-layers`) too.
   single image to cover all three targets will be disappointed; that is a
   deliberate scope limit, not an oversight.
 
-## Open questions (not decided here)
+### `start` silently reused a stale running server instead of the requested model (2026-11-01)
+
+After downloading the Nemotron-Super-49B model to try on the A40,
+`cuda-assess.sh assess` (which calls `t4-coder.sh start`) logged "Already
+running (pid ...)" and benchmarked against it -- but the pid belonged to
+the *previous* gpt-oss-20b server from the earlier session, never
+restarted. `cmd_start()` only checked `is_running` (a live pid) before
+returning early; it had no way to know the live process wasn't serving
+the alias/model the current invocation asked for. The reported numbers
+(142.4 tok/s TG) were suspiciously close to the earlier confirmed
+gpt-oss-20b/A40 result (141.9 tok/s TG) -- a 49B model should not match a
+20B model's speed -- which is what gave the bug away, not an error from
+the tool itself.
+
+Fixed by having `cmd_start()` write the actually-running alias and model
+path to `$LLM_HOME/llama-server.running` once the server is healthy, and
+checking that file against the *requested* alias/model before taking the
+"already running" early-return path. A mismatch now `die()`s with both
+the running and requested alias/model and tells the user to `stop` first,
+instead of silently serving (and benchmarking) the wrong model.
+`cmd_stop()` removes the file so a fresh `start` always re-derives it.
+
+
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
 - Where model-selection guidance (phase 4) draws its catalog from — static

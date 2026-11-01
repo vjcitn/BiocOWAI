@@ -68,6 +68,7 @@ BIN="$SRC/build/bin"
 MODEL_DIR="$LLM_HOME/models/$(basename "$HF_REPO")"
 LOG_DIR="$LLM_HOME/logs"
 PIDFILE="$LLM_HOME/llama-server.pid"
+RUNFILE="$LLM_HOME/llama-server.running"   # records what the running pid is actually serving
 NODE_DIR="$HOME/.local/node"
 VENV="$LLM_HOME/venv"
 
@@ -316,7 +317,17 @@ wait_healthy() {  # $1 = port, $2 = pid, $3 = timeout seconds
 is_running() { [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
 cmd_start() {
-  is_running && { log "Already running (pid $(cat "$PIDFILE"))."; return; }
+  local mp; mp=$(model_path); [[ -n "$mp" ]] || die "Model not found; run install first."
+  if is_running; then
+    local RUNNING_ALIAS="" RUNNING_MODEL=""
+    # shellcheck source=/dev/null
+    [[ -f "$RUNFILE" ]] && source "$RUNFILE"
+    if [[ "$RUNNING_ALIAS" != "$ALIAS" || "$RUNNING_MODEL" != "$mp" ]]; then
+      die "Already running (pid $(cat "$PIDFILE")) but serving alias='${RUNNING_ALIAS:-unknown}' model='${RUNNING_MODEL:-unknown}', not the requested alias='$ALIAS' model='$mp'. Run ./t4-coder.sh stop first, then start again."
+    fi
+    log "Already running (pid $(cat "$PIDFILE")), serving the requested alias='$ALIAS'."
+    return
+  fi
   mkdir -p "$LOG_DIR"
   "$BIN/llama-server" --version >/dev/null 2>&1 \
     || die "llama-server won't run (missing CUDA libs after an environment rebuild?). Re-run: ./t4-coder.sh install"
@@ -325,6 +336,7 @@ cmd_start() {
   setsid nohup "${SERVER_CMD[@]}" > "$LOG_DIR/llama-server.log" 2>&1 < /dev/null &
   echo $! > "$PIDFILE"
   if wait_healthy "$PORT" "$(cat "$PIDFILE")" 600; then
+    printf 'RUNNING_ALIAS=%q\nRUNNING_MODEL=%q\n' "$ALIAS" "$mp" > "$RUNFILE"
     log "Ready: http://127.0.0.1:$PORT/v1  (model id: $ALIAS)"
     nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader | sed 's/^/[t4-coder] VRAM: /'
   else
@@ -334,7 +346,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-  if is_running; then kill "$(cat "$PIDFILE")"; rm -f "$PIDFILE"; log "Stopped."
+  if is_running; then kill "$(cat "$PIDFILE")"; rm -f "$PIDFILE" "$RUNFILE"; log "Stopped."
   else log "Not running."; fi
 }
 
