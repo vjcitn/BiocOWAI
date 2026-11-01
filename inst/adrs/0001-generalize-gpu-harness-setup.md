@@ -649,6 +649,34 @@ writes `CUDA_ARCH` at all. An explicit `CUDA_ARCH=<n>` override still
 wins over detection, for a card not in the table or a deliberate
 mismatch test.
 
+### Re-run on the A40 confirms both fixes, and explains the earlier PP variance (2026-11-01)
+
+With `SKIP_APT=1 SKIP_CUDA_TOOLKIT=1`, the A40 rebuilt once (expected --
+see the `build-sm86` migration note above) and re-ran the same
+gpt-oss-20b/`N_CPU_MOE=0` benchmark:
+
+| Run | Prompt tok/s | Generation tok/s |
+|---|---|---|
+| A40, first run (cold server) | 99.7 | 141.9 |
+| A40, this run (warm server) | 159.3 | 143.7 |
+
+Both fixes are confirmed working: the report now correctly shows
+`Model alias: gpt-oss-20b, n-cpu-moe=0` instead of `unset`, and
+`CUDA_ARCH` auto-detected `sm_86` with no override needed.
+
+The PP jump (99.7 -> 159.3) while TG stayed flat (141.9 -> 143.7)
+confirms the suspicion raised when the A100's PP looked anomalously
+low: the first completion against a freshly-started server eats a
+one-time JIT/cuBLAS-algorithm-selection cost that a 15-token benchmark
+prompt is too small to average out. Prompt processing is compute-bound
+and pays that cold-start tax; token generation is steady-state/
+bandwidth-bound per output token and isn't affected the same way. None
+of the PP numbers recorded in this ADR before this entry should be
+treated as a reliable backend-to-backend comparison for that reason --
+only TG numbers are reasonably trustworthy as recorded. A real PP
+comparison would need either a warm-up request before benchmarking, or
+a much longer prompt.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
