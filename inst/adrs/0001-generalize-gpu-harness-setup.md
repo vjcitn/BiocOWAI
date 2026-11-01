@@ -330,12 +330,23 @@ updated with real numbers, the way the M4 section above was.
   through CBBBioc's direct-driving path indefinitely.
 - Whether `vjcitn/compbiobench-runner` stays a long-lived fork or its
   `PiProvider` work gets proposed upstream to Genentech at some point.
-- Whether the "no package-manager fallback, require an explicit path" cmake
-  policy (M4/Homebrew, above) should extend to `t4-coder.sh`'s `sudo
-  apt-get`/CUDA-toolkit install steps on the T4/Linux side, or whether that
-  policy is specifically a personal-workstation/dual-toolchain concern that
-  doesn't apply to disposable cloud GPU instances. Not decided; flagged
-  alongside `cuda-assess.sh`, not resolved by it.
+- ~~Whether the "no package-manager fallback, require an explicit path"
+  cmake policy (M4/Homebrew, above) should extend to `t4-coder.sh`'s `sudo
+  apt-get`/CUDA-toolkit install steps on the T4/Linux side~~ — partially
+  addressed 2026-11-01: a live T4/container run surfaced that `sudo` isn't
+  guaranteed on every T4 host (the user asked directly: "is this assuming
+  sudo privileges on cuda machines?" — yes, unconditionally, before this
+  fix). Added `SKIP_APT=1` / `SKIP_CUDA_TOOLKIT=1` env vars to
+  `t4-coder.sh`: each skips its `sudo apt-get`/`sudo dpkg -i` step and
+  instead fails fast with a clear message listing what's missing (cmake,
+  git, curl, jq, python3, gcc/g++, libcurl for apt; nvcc on PATH or under
+  `/usr/local/cuda*/bin` for the toolkit) rather than hanging on a sudo
+  password prompt or silently assuming privilege. This is opt-in, not the
+  default -- `t4-coder.sh`'s existing sudo-apt behavior is unchanged when
+  the vars are unset, so existing users see no difference. Verified both
+  the fail-fast and pass-through paths in isolation (extracted function
+  bodies run standalone, since this machine has no CUDA/apt to test
+  against directly). Not yet exercised on an actual no-sudo T4 host.
 - Real T4 numbers from `cuda-assess.sh` once it's been run on an actual T4
   host (this session has none) — needed to fill in the comparison the
   script's report references against the M4 gpt-oss-20b numbers above.

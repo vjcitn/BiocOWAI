@@ -16,6 +16,12 @@
 #   N_CPU_MOE=28 ./t4-coder.sh start      THINK=0 ./t4-coder.sh start
 #   HARNESS=both ./t4-coder.sh install    TUNE_VALUES="20 22 24 26" ./t4-coder.sh tune
 #
+# On a host/container without sudo, set SKIP_APT=1 and/or SKIP_CUDA_TOOLKIT=1
+# -- install skips the corresponding sudo apt-get/dpkg step and instead fails
+# fast with a clear message if the required tools (cmake/git/curl/jq/gcc, or
+# nvcc) aren't already on the box:
+#   SKIP_APT=1 SKIP_CUDA_TOOLKIT=1 ./t4-coder.sh install
+#
 # Everything lives under $LLM_HOME (default ~/llm) so it sits on the Terra persistent
 # disk. apt packages may need reinstalling if the cloud environment is recreated;
 # just re-run `install` (it skips finished steps).
@@ -38,6 +44,8 @@ N_CPU_MOE="${N_CPU_MOE:-24}"   # leading layers whose MoE experts stay in CPU RA
 HARNESS="${HARNESS:-pi}"       # pi | opencode | both
 THINK="${THINK:-1}"            # 1 = Qwen thinking mode (better plans), 0 = faster, no <think> tokens
 LLAMA_CPP_REF="${LLAMA_CPP_REF:-master}"
+SKIP_APT="${SKIP_APT:-0}"              # 1 = don't sudo apt-get; fail fast if required tools are missing
+SKIP_CUDA_TOOLKIT="${SKIP_CUDA_TOOLKIT:-0}"  # 1 = don't sudo-install cuda-toolkit; fail fast if nvcc is missing
 
 SRC="$LLM_HOME/src/llama.cpp"
 BIN="$SRC/build/bin"
@@ -89,6 +97,18 @@ find_nvcc() {
 
 # ---------------------------------------------------------------- install steps
 install_apt_deps() {
+  if [[ "$SKIP_APT" == "1" ]]; then
+    log "SKIP_APT=1, not running sudo apt-get; checking required tools are already present…"
+    local missing=() tool
+    for tool in cmake git curl jq python3 gcc g++; do
+      command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+    done
+    pkg-config --exists libcurl 2>/dev/null || python3 -c "import ctypes; ctypes.CDLL('libcurl.so.4')" >/dev/null 2>&1 \
+      || missing+=("libcurl4(-dev)")
+    (( ${#missing[@]} == 0 )) || die "SKIP_APT=1 but missing: ${missing[*]} -- install these yourself (no sudo apt-get will run) or unset SKIP_APT."
+    log "Required build tools found on PATH; skipping apt."
+    return
+  fi
   log "Installing build dependencies (sudo apt)…"
   sudo apt-get update -qq
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
@@ -100,6 +120,9 @@ ensure_cuda_toolkit() {
   if NVCC=$(find_nvcc); then
     log "nvcc: $NVCC ($("$NVCC" --version | grep -o 'release [0-9.]*'))"
     return
+  fi
+  if [[ "$SKIP_CUDA_TOOLKIT" == "1" ]]; then
+    die "SKIP_CUDA_TOOLKIT=1 but no nvcc found (checked PATH, /usr/local/cuda/bin, /usr/local/cuda-12.8/bin) -- install the CUDA toolkit yourself (no sudo apt-get/dpkg will run) or unset SKIP_CUDA_TOOLKIT."
   fi
   warn "Driver present but no nvcc; installing cuda-toolkit-12-8 from NVIDIA's apt repo."
   . /etc/os-release
