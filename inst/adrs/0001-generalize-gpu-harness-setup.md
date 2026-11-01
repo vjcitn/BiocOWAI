@@ -361,10 +361,27 @@ needs no changes to drive this -- it already just forwards env vars to
 `t4-coder.sh install`/`start` and its benchmark/report logic is model-
 agnostic.
 
-**Not yet run** on the actual A40 -- `t4-coder.sh`'s edits are syntax-
-checked (`bash -n`) only; this needs a real run to confirm the gpt-oss-20b
-download, CUDA build at `sm_86`, and `N_CPU_MOE=0` serving actually work,
-and to get real throughput numbers alongside the M4 and T4 ones above.
+**Run on the real A40 (2026-11-01).** No sudo on this host; `SKIP_APT=1
+SKIP_CUDA_TOOLKIT=1` worked -- the box already had the required tools, so
+both checks passed without installing anything. `gpt-oss-20b-MXFP4.gguf`
+downloaded (12.1 GB over public, unauthenticated HF access; a cosmetic
+"no HF_TOKEN" rate-limit warning, not an error), llama.cpp built for
+`sm_86`, server started with `N_CPU_MOE=0` (fully GPU-resident) at
+`ctx=65536`. Result: **99.7 tok/s prompt processing, 141.9 tok/s token
+generation** (VRAM 12969/46068 MiB -- only ~28% used, huge headroom
+left). This is the fastest of the three backends by a wide margin: ~4x
+the M4's ~35 tok/s generation and the T4's 31.2 tok/s, as expected for a
+real datacenter GPU running the same model fully GPU-resident with no
+offload at all. VRAM headroom means a larger model (or much longer
+context) is clearly viable on this card if useful later.
+
+In the course of this run, `cuda-assess.sh`'s report footer was also
+fixed: it had hardcoded "Qwen3.6-35B-A3B... vs. gpt-oss-20b... on T4" in
+its comparison text, which became actively misleading once the same
+script ran gpt-oss-20b on a non-T4 card. Replaced with a generic
+model/alias/n-cpu-moe-aware footer so future runs on any backend print
+something accurate instead of a stale assumption baked in from the first
+(T4-only) version of the script.
 
 ## Consequences
 
@@ -424,5 +441,7 @@ and to get real throughput numbers alongside the M4 and T4 ones above.
   above) should eventually become a project-wide policy that also covers
   the T4's existing Qwen3.6 setup, or stays scoped to new machines only --
   explicitly deferred, not decided.
-- Real A40 numbers once `cuda-assess.sh`/`t4-coder.sh install` has
-  actually been run there with `CUDA_ARCH=86` and gpt-oss-20b.
+- Whether the A40's large VRAM headroom (only ~13 GB/46 GB used by
+  gpt-oss-20b) is worth exploiting with a bigger model, now that the
+  USA/Europe constraint narrows the realistic candidates -- not decided,
+  no catalog of options evaluated yet.

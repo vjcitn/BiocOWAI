@@ -55,16 +55,17 @@ bench() {
   tg_tps=$(python3 -c "print(round($tg_n / ($tg_ms/1000), 1))")
 
   echo
-  log "=== CUDA/T4 assessment report ==="
+  log "=== CUDA assessment report ==="
   log "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
+  log "Model alias: ${ALIAS:-unset}, n-cpu-moe=${N_CPU_MOE:-unset}"
   log "Prompt processing: ${pp_tps} tok/s (${pp_n} tokens in ${pp_ms} ms)"
   log "Token generation:  ${tg_tps} tok/s (${tg_n} tokens in ${tg_ms} ms)"
   echo
-  log "Compare against the M4 Metal numbers in ADR 0001 (gpt-oss-20b, ~35 tok/s generation)."
-  log "Note the models differ -- Qwen3.6-35B-A3B MoE here (partly CPU-offloaded experts via"
-  log "--n-cpu-moe) vs. gpt-oss-20b there (fully GPU-resident on M4's unified memory) -- so"
-  log "this is a per-backend sanity check that the harness-serving pipeline works end to end"
-  log "on T4, not an apples-to-apples model comparison."
+  log "Compare against the other backends' numbers in ADR 0001 -- but check the model and"
+  log "n-cpu-moe (CPU-offloaded MoE experts, 0 = fully GPU-resident) logged above first:"
+  log "different models/offload settings across runs make this a per-backend sanity check"
+  log "that the harness-serving pipeline works end to end here, not an apples-to-apples"
+  log "comparison unless both sides used the same model and offload setting."
 }
 
 usage() { die "Usage: $0 {assess|stop}"; }
