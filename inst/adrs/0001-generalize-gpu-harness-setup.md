@@ -735,6 +735,66 @@ above) -- this just confirms the CBBBioc-on-A100 pipeline itself works
 end to end: install, file staging, Pi invocation, and answer/usage
 parsing.
 
+### Answer-quality audit of the 3 v1qs example runs (2026-11-01)
+
+Exit code 0 and a well-formed answer do not mean the answer is correct.
+The user flagged that all three answers looked suspiciously clean (bare
+integers/lists), which prompted auditing the raw trace JSONL's
+`tool_execution_start`/`tool_execution_end` events (not just the parsed
+final answer) for each run:
+
+- **`bedtools-ops-q1` (answered 111424282):** real computation, not a
+  guess -- `bedtools`/`conda` weren't on `chandl03`'s `PATH` and
+  `pybedtools` failed (`sortBed` not installed), so the model fell back
+  to a hand-written Python interval merge, fixing two real bugs
+  (`NameError`, a `set`/dict-comprehension bug) before it ran. But the
+  question asks to "exclude any [interval] that overlaps" the blacklist
+  -- i.e. drop the whole 500bp interval on any overlap (`bedtools subtract
+  -A` semantics, which the model's own first, failed `pybedtools`
+  attempt had correctly specified: `.subtract(blacklist_bed, A=True)`).
+  The hand-written fallback silently reverted to plain-subtract/clip
+  semantics instead (keeps the non-overlapping remainder of each
+  interval rather than dropping it entirely), which overcounts bases
+  relative to what was asked. **Likely a wrong answer due to a logic
+  regression introduced during self-correction, not hallucination.**
+- **`covid-patient-q1` (answered a 12-donor list):** the real problem.
+  The model's first attempt defined "viral genes" as any gene symbol
+  containing the letters `N`, `S`, or `ORF` -- this matched all 12984
+  genes in the dataset (useless), correctly producing an empty
+  `healthy=[]` result. Rather than fixing the gene-selection logic, it
+  silently replaced it with a hand-typed candidate list of 19
+  *sequential* Ensembl IDs (`ENSG00000167984` through `ENSG00000168003`,
+  i.e. counting up by one) with no stated biological rationale, kept
+  whichever 7 happened to exist in this dataset's `var_names`, computed
+  each donor's mean expression of just those 7 "genes", sorted all 33
+  donors by that mean (a smooth, gapless distribution -- no natural
+  bimodal cutoff visible anywhere in it), and called the bottom 12
+  "healthy" with no stated threshold criterion for why 12 rather than
+  10 or 15. Nothing in the trace shows these 7 genes are real
+  SARS-CoV-2/interferon-stimulated marker genes rather than an
+  essentially arbitrary guess. **This answer should be treated as
+  unreliable** -- a well-formatted, confidently-stated answer produced
+  from a fabricated feature list and an unjustified cutoff.
+- **`gtf-5-utr-median-len-q1` (answered 133;1296;1050):** sound.
+  Correctly parses MANE Select transcripts on standard chromosomes,
+  merges CDS intervals, subtracts them from each exon to get UTR
+  segments, and assigns 5'/3' by genomic position relative to strand --
+  then, notably, spot-checks this logic by hand against one specific
+  transcript (`NM_145011.4`, strand `-`) before aggregating medians
+  (via `numpy.median` + `floor`, as the question specifies) across all
+  19226 qualifying transcripts. This self-verification step is exactly
+  what's missing from the other two runs.
+
+**Takeaway:** none of this would have been visible from the parsed
+`answer`/`usage` fields `cbb_run_question()` returns -- only the full
+trace's tool-call events exposed it. `v1qs` ships no ground-truth
+column, so spot-auditing trace JSONL (not just checking for exit_code 0
+and a well-formed answer) is currently the only way to catch this kind
+of silent logic substitution. Worth considering whether a future
+`CBBBioc` helper should surface a run's tool-call count/error-retry
+count alongside the answer, as a cheap "how much did this model have to
+improvise" signal -- not decided here.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
