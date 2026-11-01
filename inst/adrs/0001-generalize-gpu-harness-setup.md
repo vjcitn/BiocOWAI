@@ -677,6 +677,30 @@ only TG numbers are reasonably trustworthy as recorded. A real PP
 comparison would need either a warm-up request before benchmarking, or
 a much longer prompt.
 
+### Fourth host: a 10 GB NVIDIA vGPU slice (`A100X-10C`) needs real offload, not just tuning-for-speed (2026-11-01)
+
+A new Jetstream2/Exosphere VM (`owaigpu`) reported `GRID A100X-10C,
+10240 MiB` -- an NVIDIA vGPU time-sliced partition of a physical A100
+(compute_cap still reads 8.0, so `CUDA_ARCH` auto-detected correctly as
+80, same as the bare-metal A100). Unlike the earlier `A100X-20C` slice,
+10 GB is *less* than gpt-oss-20b's fully-GPU-resident footprint
+(~12 GB, per the A40's `N_CPU_MOE=0` VRAM usage), so `N_CPU_MOE=0`
+isn't just slower here, it's a hard OOM (confirmed by `tune`:
+`n-cpu-moe=0 failed to load`).
+
+`./t4-coder.sh tune` found `N_CPU_MOE=16` fastest (24 t/s decode,
+6785 MiB) and saved `N_CPU_MOE=18` (+2 headroom). The real `cuda-assess.sh`
+run matched closely: 35.2 tok/s PP, 24.8 tok/s TG, at 18 MoE layers
+offloaded to CPU RAM. Much slower than the A40 (141.9 TG) or bare A100
+(157.4 TG) -- expected, since an NVIDIA vGPU profile like this likely
+time-slices the physical card's compute across tenants/slices as well
+as partitioning VRAM, so this slice's share of the A100's SMs is well
+below 100%, on top of now also paying CPU-RAM round-trips for 18 of the
+MoE layers. The host also logged `RAM: 29 GB` against t4-coder.sh's own
+"52 GB recommended" warning; it ran fine this time, but that's a
+candidate explanation if this host ever behaves erratically under
+load.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
