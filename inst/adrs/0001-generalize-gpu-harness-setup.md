@@ -383,6 +383,34 @@ model/alias/n-cpu-moe-aware footer so future runs on any backend print
 something accurate instead of a stale assumption baked in from the first
 (T4-only) version of the script.
 
+### tune's default range was Qwen/T4-scale, not model-agnostic (2026-11-01)
+
+User ran `./t4-coder.sh tune` against the A40's gpt-oss-20b config (saved
+from the run above) using the default `TUNE_VALUES` (`16 20 24 28 32`),
+which was sized for Qwen3.6-35B-A3B's layer count. gpt-oss-20b has far
+fewer MoE layers, so every candidate in that range forced most of the
+model onto CPU RAM -- the "best" result it found was `n-cpu-moe=16` at
+only **6 tok/s** decode (3395-6623 MiB VRAM used, i.e. barely touching
+the GPU), a >20x regression from the already-confirmed `N_CPU_MOE=0`
+result of 141.9 tok/s. Worse: `tune` always saves its pick, so this
+silently overwrote the known-good config with a far worse one. Fixed by
+hand: `N_CPU_MOE=0 ./t4-coder.sh start` (confirmed healthy again,
+12969/46068 MiB, matching the original benchmark run).
+
+Two fixes applied: (1) `TUNE_VALUES` default now includes `0` (`0 16 20
+24 28 32`), so "fully GPU-resident" is always a candidate rather than
+only reachable by knowing to pass it explicitly; (2) the "+2 for context
+headroom" step after picking the fastest candidate is now skipped when
+the fastest is `0` -- stepping to `N_CPU_MOE=2` in that case would trade
+away a confirmed-optimal, comfortably-fitting setting for no VRAM-
+pressure reason at all (the whole point of the headroom nudge is to hedge
+when VRAM is tight; it isn't, when `0` already won). **Lesson applied
+going forward:** a tuning sweep's default search range is itself a
+hardcoded assumption about scale -- the same category of problem phase 1
+is meant to solve for GPU identity, but it recurred here one level up, in
+a sweep's candidate list rather than a build flag. Worth remembering when
+adding tuning for Metal (`--n-gpu-layers`) too.
+
 ## Consequences
 
 - `t4-coder.sh` becomes the T4 profile implementation under the new

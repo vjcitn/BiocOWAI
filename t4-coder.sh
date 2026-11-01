@@ -16,6 +16,12 @@
 #   N_CPU_MOE=28 ./t4-coder.sh start      THINK=0 ./t4-coder.sh start
 #   HARNESS=both ./t4-coder.sh install    TUNE_VALUES="20 22 24 26" ./t4-coder.sh tune
 #
+# `tune`'s default TUNE_VALUES (0 16 20 24 28 32) is sized for the T4/
+# Qwen3.6-35B default; on a different model/card, a candidate that doesn't
+# fit still just reports "failed to load" and gets skipped, so a wide
+# default range is safe to leave as-is, but pass TUNE_VALUES explicitly if
+# you already know a tighter range is more informative for your setup.
+#
 # On a host/container without sudo, set SKIP_APT=1 and/or SKIP_CUDA_TOOLKIT=1
 # -- install skips the corresponding sudo apt-get/dpkg step and instead fails
 # fast with a clear message if the required tools (cmake/git/curl/jq/gcc, or
@@ -344,7 +350,7 @@ cmd_status() {
 cmd_tune() {
   is_running && die "Stop the main server first (./t4-coder.sh stop); tuning needs the whole GPU."
   local candidates tport=8191 best="" best_tg=0
-  read -r -a candidates <<<"${TUNE_VALUES:-16 20 24 28 32}"
+  read -r -a candidates <<<"${TUNE_VALUES:-0 16 20 24 28 32}"
   mkdir -p "$LOG_DIR"
   # ~2K-token prompt so prefill speed is measured too; agent loops are prefill-heavy
   local payload
@@ -375,8 +381,14 @@ print(json.dumps({"prompt": "Review this code and suggest improvements:\n" + cod
     fi
   done
   [[ -n "$best" ]] || die "No setting loaded. Try TUNE_VALUES=\"32 36 40\" or CTX=32768."
-  # Step one notch toward CPU from the fastest, to leave VRAM headroom as context fills up
-  N_CPU_MOE=$(( best + 2 ))
+  if (( best == 0 )); then
+    # best already fit fully GPU-resident with room to spare -- no VRAM
+    # pressure to hedge against, so don't step off the fastest setting.
+    N_CPU_MOE=0
+  else
+    # Step one notch toward CPU from the fastest, to leave VRAM headroom as context fills up
+    N_CPU_MOE=$(( best + 2 ))
+  fi
   save_config
   log "Fastest was n-cpu-moe=$best (${best_tg} t/s). Saved N_CPU_MOE=$N_CPU_MOE (+2 for context headroom)."
   log "Next: ./t4-coder.sh start"
