@@ -292,10 +292,21 @@ obviously apply. Left as an open question below rather than assumed
 either way, since changing it would mean editing already-working,
 already-used code without being able to test the result locally.
 
-**Not yet run** — this session has no T4/CUDA host access. The script is
-written and syntax-checked (`bash -n`) only; it needs to be run on an
-actual T4 host and the results reported back before this section can be
-updated with real numbers, the way the M4 section above was.
+**Run on a real T4 (2026-11-01)**, via `cuda-assess.sh assess` on the
+user's T4 container (commit 7cc8962, before the `SKIP_APT`/
+`SKIP_CUDA_TOOLKIT` addition below). Full pipeline succeeded end to end:
+apt deps, CUDA toolkit, llama.cpp CUDA build for sm_75, model already
+cached from a prior run, Pi harness install, server start at
+`N_CPU_MOE=22`/`ctx=65536`, benchmark. Result: **35.3 tok/s prompt
+processing, 31.2 tok/s token generation** (VRAM 12431/15360 MiB). That's
+comparable to the M4's ~35 tok/s generation on gpt-oss-20b, despite
+Qwen3.6-35B-A3B being a much larger model running with its MoE experts
+partly offloaded to CPU RAM rather than fully GPU-resident -- a good sign
+that `--n-cpu-moe` offload is doing its job. Confirms the "does the
+harness-serving pipeline work end to end on T4" question: yes. (This run
+used the default `N_CPU_MOE=22`, not a `tune` sweep, so whether a
+different split pushes throughput higher is still open, same as the M4
+Metal-layer-offload question above.)
 
 ## Consequences
 
@@ -347,6 +358,6 @@ updated with real numbers, the way the M4 section above was.
   the fail-fast and pass-through paths in isolation (extracted function
   bodies run standalone, since this machine has no CUDA/apt to test
   against directly). Not yet exercised on an actual no-sudo T4 host.
-- Real T4 numbers from `cuda-assess.sh` once it's been run on an actual T4
-  host (this session has none) — needed to fill in the comparison the
-  script's report references against the M4 gpt-oss-20b numbers above.
+- Whether a `tune`-style `--n-cpu-moe` sweep on T4 beats the default 22
+  used in the 2026-11-01 run above (31.2 tok/s generation) -- not yet
+  swept, same open question as the M4's untried `--n-gpu-layers` sweep.
