@@ -492,6 +492,39 @@ token, so a smaller quant would only buy a roughly proportional bump
 (~15.8 -> ~18-19 tok/s), not close the ~9x gap to gpt-oss-20b's MoE
 architecture. Not worth testing for this purpose.
 
+### A100 added as a third CUDA target; PDL crash found and disabled (2026-11-01)
+
+Third machine, a fresh A100-PCIE-40GB (compute capability 8.0 -> `sm_80`,
+`CUDA_ARCH=80`), no sudo (same `SKIP_APT=1 SKIP_CUDA_TOOLKIT=1` pattern as
+the A40). `gpt-oss-20b` install/download/build succeeded, but
+`llama-server` crashed on startup (not OOM, despite the generic error
+message) with a CUDA abort inside `ggml_cuda_kernel_can_use_pdl`, called
+while fusing an RMSNorm+mul kernel.
+
+Root cause: llama.cpp's Programmatic Dependent Launch (PDL) support is a
+Hopper-only (CC >= 9.0) kernel-launch optimization, but its capability
+probe (`cudaFuncGetAttributes` inside `ggml_cuda_kernel_can_use_pdl`,
+`ggml/src/ggml-cuda/common.cuh`) still runs on every card whenever
+`GGML_CUDA_USE_PDL` was compiled in (gated only on CUDA runtime >= 11.8,
+not on the GPU's actual compute capability) -- and that probe itself
+crashed on this box (CTK 13.1, driver-reported CUDA 13.3). None of this
+project's three target cards (T4 `sm_75`, A40 `sm_86`, A100 `sm_80`) are
+Hopper, so PDL has zero upside here and only this downside. Confirmed
+disableable at runtime, no rebuild, via `GGML_CUDA_PDL=0` (checked
+against the upstream source directly: `getenv("GGML_CUDA_PDL")`, nonzero
+or unset enables it, so `=0` is the only way off). This also matches a
+recurring pattern upstream -- PDL has needed several follow-up fixes
+since it landed (CC-check bugs, MSVC/CTK-version restrictions, a
+`launch_fattn` PDL disable for a compiler bug) -- so it's a known rough
+edge, not a one-off.
+
+Added `export GGML_CUDA_PDL="${GGML_CUDA_PDL:-0}"` to `t4-coder.sh`'s
+config block, defaulting it off for every build/start/tune invocation on
+all three backends. Still overridable (`GGML_CUDA_PDL=1 ./t4-coder.sh
+start`) if a future Hopper card (H100, `sm_90`) is added and PDL's
+upstream stability has improved. Not yet re-run on the A100 to confirm
+the fix resolves the crash -- next step.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).

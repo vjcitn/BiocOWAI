@@ -61,6 +61,10 @@ SKIP_APT="${SKIP_APT:-0}"              # 1 = don't sudo apt-get; fail fast if re
 SKIP_CUDA_TOOLKIT="${SKIP_CUDA_TOOLKIT:-0}"  # 1 = don't sudo-install cuda-toolkit; fail fast if nvcc is missing
 CUDA_ARCH="${CUDA_ARCH:-75}"    # CMAKE_CUDA_ARCHITECTURES value; 75=T4, 86=A40/A6000, 89=L4/L40,
                                 # 80=A100, 90=H100 -- see inst/scripts/gpu-detect.sh's cuda_arch field
+export GGML_CUDA_PDL="${GGML_CUDA_PDL:-0}"   # Programmatic Dependent Launch only helps Hopper+ (CC
+                                # >= 9.0); none of this project's target cards qualify, and its
+                                # capability-check call has crashed llama.cpp on at least one Ampere
+                                # (A100, CTK 13.1/driver 13.3) box, so it's off by default here
                                 # (strip the "sm_" prefix it reports) for the right value on a new card
 
 SRC="$LLM_HOME/src/llama.cpp"
