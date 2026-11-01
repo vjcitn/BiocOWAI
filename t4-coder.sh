@@ -43,10 +43,46 @@
 
 set -euo pipefail
 
+log()  { printf '\033[1;34m[t4-coder]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[t4-coder] WARNING:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[t4-coder] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# CUDA_ARCH is a property of the GPU actually in the box, not a user
+# preference -- unlike ALIAS/N_CPU_MOE it must never be trusted from a saved
+# config.env, since $LLM_HOME may be NFS-shared across hosts with different
+# cards (see ADR 0001: a stale CUDA_ARCH from another host's config.env is
+# exactly the "no kernel image available for execution" crash, just coming
+# from the config file instead of a shared build directory). Auto-detect via
+# nvidia-smi instead, same compute_cap -> arch mapping as gpu-detect.sh.
+detect_cuda_arch() {
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    warn "nvidia-smi not found; defaulting CUDA_ARCH=75 (T4) -- override with CUDA_ARCH=<n> if wrong."
+    echo 75; return
+  fi
+  local cc
+  cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null \
+         | head -1 | tr -d '[:space:]')
+  case "$cc" in
+    7.5) echo 75 ;;   # T4
+    8.0) echo 80 ;;   # A100
+    8.6) echo 86 ;;   # A40/A6000
+    8.9) echo 89 ;;   # L4/L40/RTX 40xx
+    9.0) echo 90 ;;   # H100
+    *)
+      warn "nvidia-smi compute_cap='${cc:-none}' isn't in the known table (75/80/86/89/90);" \
+           "defaulting CUDA_ARCH=75 (T4) -- pass CUDA_ARCH=<n> explicitly for this card."
+      echo 75 ;;
+  esac
+}
+
 LLM_HOME="${LLM_HOME:-$HOME/llm}"
 CONFIG="$LLM_HOME/config.env"
+_CUDA_ARCH_FROM_ENV="${CUDA_ARCH:-}"   # capture a real override before config.env can clobber it
 # shellcheck source=/dev/null
 [[ -f "$CONFIG" ]] && source "$CONFIG"   # written as ": ${VAR:=value}", so env vars win
+# Ignore any CUDA_ARCH an (old or another host's) config.env just set unless it really
+# came from this invocation's own environment -- see detect_cuda_arch's comment above.
+[[ -z "$_CUDA_ARCH_FROM_ENV" ]] && unset CUDA_ARCH
 
 HF_REPO="${HF_REPO:-unsloth/Qwen3.6-35B-A3B-GGUF}"
 QUANT="${QUANT:-UD-Q4_K_XL}"
@@ -59,8 +95,9 @@ THINK="${THINK:-1}"            # 1 = Qwen thinking mode (better plans), 0 = fast
 LLAMA_CPP_REF="${LLAMA_CPP_REF:-master}"
 SKIP_APT="${SKIP_APT:-0}"              # 1 = don't sudo apt-get; fail fast if required tools are missing
 SKIP_CUDA_TOOLKIT="${SKIP_CUDA_TOOLKIT:-0}"  # 1 = don't sudo-install cuda-toolkit; fail fast if nvcc is missing
-CUDA_ARCH="${CUDA_ARCH:-75}"    # CMAKE_CUDA_ARCHITECTURES value; 75=T4, 86=A40/A6000, 89=L4/L40,
-                                # 80=A100, 90=H100 -- see inst/scripts/gpu-detect.sh's cuda_arch field
+CUDA_ARCH="${CUDA_ARCH:-$(detect_cuda_arch)}"  # CMAKE_CUDA_ARCHITECTURES value; auto-detected from
+                                # nvidia-smi above unless passed explicitly -- 75=T4, 86=A40/A6000,
+                                # 89=L4/L40, 80=A100, 90=H100
 export GGML_CUDA_PDL="${GGML_CUDA_PDL:-0}"   # Programmatic Dependent Launch only helps Hopper+ (CC
                                 # >= 9.0); none of this project's target cards qualify, and its
                                 # capability-check call has crashed llama.cpp on at least one Ampere
@@ -79,14 +116,13 @@ RUNFILE="$LLM_HOME/llama-server.running"   # records what the running pid is act
 NODE_DIR="$HOME/.local/node"
 VENV="$LLM_HOME/venv"
 
-log()  { printf '\033[1;34m[t4-coder]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[t4-coder] WARNING:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[t4-coder] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
-
 save_config() {
   mkdir -p "$LLM_HOME"
   {
-    for v in HF_REPO QUANT ALIAS PORT CTX N_CPU_MOE HARNESS THINK CUDA_ARCH; do
+    # CUDA_ARCH deliberately excluded -- it's auto-detected from nvidia-smi each run
+    # (see detect_cuda_arch above), not a saved preference; persisting it would let a
+    # stale value from another host sharing this $LLM_HOME silently override detection.
+    for v in HF_REPO QUANT ALIAS PORT CTX N_CPU_MOE HARNESS THINK; do
       printf ': "${%s:=%s}"\n' "$v" "${!v}"
     done
   } > "$CONFIG"
