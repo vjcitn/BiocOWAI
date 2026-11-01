@@ -456,7 +456,43 @@ the running and requested alias/model and tells the user to `stop` first,
 instead of silently serving (and benchmarking) the wrong model.
 `cmd_stop()` removes the file so a fresh `start` always re-derives it.
 
+### Nemotron-Super-49B tried on the A40; gpt-oss-20b stays the default (2026-11-01)
 
+Tried Llama-3.3-Nemotron-Super-49B-v1 (NVIDIA/USA, bartowski's Q5_K_M
+GGUF) on the A40 as a USA/Europe-compliant alternative to gpt-oss-20b,
+per the user's "let's try the nemotron." With `N_CPU_MOE=0` (fully
+GPU-resident, ~40/46 GB VRAM):
+
+| Model | Type | Prompt tok/s | Generation tok/s | VRAM |
+|---|---|---|---|---|
+| gpt-oss-20b | MoE | 99.7 | 141.9 | 13/46 GB |
+| Nemotron-Super-49B (Q5_K_M) | Dense/hybrid | 142.2 | 15.8 | 40/46 GB |
+
+Generation is ~9x slower on Nemotron despite similar (even slightly
+faster) prompt processing. This is architectural, not a config problem:
+gpt-oss-20b is MoE with only ~3B active params/token even though ~20B
+total, while Nemotron-Super-49B is dense/hybrid (Mamba2 + attention) --
+essentially all 49B params activate every token. The hybrid layers are
+cheap at prefill (explaining the faster PP) but generation pays the full
+dense cost per token.
+
+Decision: gpt-oss-20b remains the A40 default -- 15.8 tok/s TG is usable
+but noticeably worse for an interactive coding-agent loop than 141.9
+tok/s, and the USA/Europe provenance constraint doesn't require using
+the largest compliant model, just a compliant one. Nemotron-Super-49B
+stays documented here as a known, slower, higher-capacity alternative if
+a task ever needs the extra parameters badly enough to tolerate the
+generation-speed hit. (Caught cleanly this time by the stale-server guard
+just added above -- this was the first real run exercising it.)
+
+Considered but not tried: Q4_K_M (~28 GB vs. Q5_K_M's ~33 GB). Since
+Q5_K_M already fits fully GPU-resident, there's no offload penalty to
+relieve -- dense-model decode speed is bandwidth-bound by bytes read per
+token, so a smaller quant would only buy a roughly proportional bump
+(~15.8 -> ~18-19 tok/s), not close the ~9x gap to gpt-oss-20b's MoE
+architecture. Not worth testing for this purpose.
+
+## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).
 - Where model-selection guidance (phase 4) draws its catalog from — static
