@@ -522,8 +522,59 @@ Added `export GGML_CUDA_PDL="${GGML_CUDA_PDL:-0}"` to `t4-coder.sh`'s
 config block, defaulting it off for every build/start/tune invocation on
 all three backends. Still overridable (`GGML_CUDA_PDL=1 ./t4-coder.sh
 start`) if a future Hopper card (H100, `sm_90`) is added and PDL's
-upstream stability has improved. Not yet re-run on the A100 to confirm
-the fix resolves the crash -- next step.
+upstream stability has improved.
+
+Turned out to be a red herring (see next section): PDL and kernel fusion
+were never the real cause here, both were just the first two ops whose
+`CUDA_CHECK()` happened to surface a different, underlying problem.
+`GGML_CUDA_PDL=0` is still kept as a default -- it remains correct and
+harmless for this project's (all pre-Hopper) cards -- but it did not fix
+this crash.
+
+### Real cause: `$LLM_HOME` is NFS-shared across cluster nodes, so `install` reused the wrong card's binary (2026-11-01)
+
+Even with `GGML_CUDA_PDL=0`, and then with `GGML_CUDA_DISABLE_FUSION=1`
+added on top, the A100 still crashed -- now inside the plain, unfused
+`rms_norm_f32_cuda` kernel, i.e. not a PDL or fusion bug at all. The
+actual error, found by grepping the log directly for `CUDA error`
+instead of trusting the backtrace alone, was: `CUDA error: no kernel
+image is available for execution on the device` -- the running binary
+has no compiled code for this GPU's compute capability. Confirmed with
+`strings .../llama-server | grep -o 'sm_[0-9]\+'`: the binary was built
+for `sm_86` (the A40's architecture), despite this `install` call
+explicitly passing `CUDA_ARCH=80`.
+
+Cause: this cluster's home directory (`/udd/stvjc`) is NFS-shared across
+nodes, so `$LLM_HOME` (`~/llm` by default) is the *same filesystem* on
+the A40 host and this A100 host. `cmd_install()`'s build-skip check,
+`[[ -x "$BIN/llama-server" && "${REBUILD:-0}" != 1 ]]`, found the A40's
+already-built `sm_86` binary sitting at the shared path and skipped
+building entirely -- it only checks that *a* binary exists, never that
+it matches the architecture this invocation asked for. Same bug shape as
+the stale-running-server issue above, one step earlier in the pipeline:
+"skip this step, something is already there" without checking the
+something is the *right* one for the current request. (The model
+directory being shared was fine and even desirable here -- GGUF weights
+are architecture-agnostic -- only the compiled `llama-server` binary is
+architecture-specific.)
+
+Fixed structurally rather than with another piece of bookkeeping:
+`t4-coder.sh` now builds into `$SRC/build-sm${CUDA_ARCH}` instead of a
+single shared `$SRC/build`, so each card's binary lives at its own path
+and the "already built" check is automatically correct -- a shared
+`$LLM_HOME` across an A40 and an A100 node now just works, each getting
+its own `$BUILD_DIR/bin/llama-server`, with no new state to go stale.
+Not yet re-run on the A100 to confirm this resolves it (next step), but
+`strings`-ing the previous binary already proved the diagnosis.
+
+Not addressed yet, flagged as a follow-up risk rather than fixed now:
+`$PIDFILE`/`$RUNFILE`/`config.env` are still single shared paths under
+`$LLM_HOME`. Two hosts sharing a `$LLM_HOME` that both try to `start` at
+once would stomp on each other's pidfile/config (and `is_running`'s
+`kill -0` check is meaningless across hosts, since pids aren't in a
+shared namespace). Not hit yet because usage so far has been strictly
+sequential (stop one host's server before moving to the next), but worth
+fixing if concurrent multi-host use of one `$LLM_HOME` is ever expected.
 
 ## Open questions (not decided here)
 

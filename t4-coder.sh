@@ -68,7 +68,10 @@ export GGML_CUDA_PDL="${GGML_CUDA_PDL:-0}"   # Programmatic Dependent Launch onl
                                 # (strip the "sm_" prefix it reports) for the right value on a new card
 
 SRC="$LLM_HOME/src/llama.cpp"
-BIN="$SRC/build/bin"
+BUILD_DIR="$SRC/build-sm${CUDA_ARCH}"   # arch-specific: $LLM_HOME may be NFS-shared across
+                                        # GPU hosts (e.g. a cluster with a shared $HOME), so a
+                                        # build for one card must never be mistaken for another's
+BIN="$BUILD_DIR/bin"
 MODEL_DIR="$LLM_HOME/models/$(basename "$HF_REPO")"
 LOG_DIR="$LLM_HOME/logs"
 PIDFILE="$LLM_HOME/llama-server.pid"
@@ -173,13 +176,13 @@ build_llama_cpp() {
   log "Building llama.cpp for sm_${CUDA_ARCH} (takes ~10-20 min on a few vCPUs)…"
   local cuda_bin; cuda_bin=$(dirname "$NVCC")
   export PATH="$cuda_bin:$PATH"
-  cmake -S "$SRC" -B "$SRC/build" \
+  cmake -S "$SRC" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_CUDA=ON \
     -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" \
     -DCMAKE_CUDA_COMPILER="$NVCC" \
     -DBUILD_SHARED_LIBS=OFF > "$LOG_DIR/cmake.log"
-  cmake --build "$SRC/build" --config Release -j "$(nproc)" \
+  cmake --build "$BUILD_DIR" --config Release -j "$(nproc)" \
     --target llama-server llama-cli llama-bench > "$LOG_DIR/build.log" 2>&1 \
     || die "Build failed; see $LOG_DIR/build.log"
   log "Built: $BIN/llama-server"
