@@ -597,6 +597,37 @@ inspect/remove by hand, then a fresh clone proceeds. Confirmed safe
 after the fact in this instance, but the move-aside behavior holds
 regardless of what the directory turns out to contain next time.
 
+### A100 result, and a reporting bug in `cuda-assess.sh` (2026-11-01)
+
+With the `build-sm${CUDA_ARCH}` fix and a clean clone, the A100 build
+succeeded and `gpt-oss-20b` served correctly (confirmed by the new
+stale-server guard: "Already running ... serving the requested
+alias='gpt-oss-20b'"). Real result:
+
+| GPU | Prompt tok/s | Generation tok/s | VRAM |
+|---|---|---|---|
+| A40 | 99.7 | 141.9 | 13/46 GB |
+| A100-PCIE-40GB | 72.4 | 157.4 | n/a (bench run didn't query it) |
+
+Both are gpt-oss-20b, `N_CPU_MOE=0`. Generation is faster on the A100
+(more memory bandwidth, HBM2 vs. the A40's GDDR6), prompt processing is
+slower -- plausibly noise from the tiny 15-token benchmark prompt (a
+single-shot timing at that size is dominated by fixed overhead, not
+throughput) rather than a real architectural difference; not
+investigated further since both numbers are well within "fast enough
+for interactive use."
+
+Also surfaced by this run: `cuda-assess.sh`'s report printed `Model
+alias: unset, n-cpu-moe=unset` -- it logs `$ALIAS`/`$N_CPU_MOE` from its
+own shell's environment, but this invocation didn't re-pass them
+(they'd already been saved to `~/llm/config.env` by the earlier
+`install`/`start` calls), so the wrapper had nothing to read. Previous
+runs always happened to pass `ALIAS=...` inline on the same command
+line, masking this. Fixed by having `cuda-assess.sh` source
+`$LLM_HOME/config.env` itself, the same way `t4-coder.sh` does, so the
+report reflects the actually-saved config regardless of how the script
+was invoked.
+
 ## Open questions (not decided here)
 
 - Exact schema for the GPU profile (what fields phase 1 emits).

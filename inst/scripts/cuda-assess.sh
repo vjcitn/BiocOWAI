@@ -32,6 +32,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 T4_CODER="${T4_CODER:-$SCRIPT_DIR/../../t4-coder.sh}"
 PORT="${PORT:-8181}"
 
+# Pick up ALIAS/N_CPU_MOE/etc. from t4-coder.sh's saved config, same as t4-coder.sh
+# itself does -- otherwise the report below shows "unset" whenever this script is
+# invoked without re-passing every override already saved from a prior install/start.
+LLM_HOME="${LLM_HOME:-$HOME/llm}"
+CONFIG="$LLM_HOME/config.env"
+# shellcheck source=/dev/null
+[[ -f "$CONFIG" ]] && source "$CONFIG"
+
 log()  { printf '\033[1;36m[cuda-assess]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[cuda-assess] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
